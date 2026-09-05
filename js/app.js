@@ -1848,6 +1848,10 @@ async function fetchHistorique(arbreId) {
 }
 
 window.ouvrirFormulaireSuivi = function() {
+    if (!arbreSelectionne?.id) {
+        showToast('Ouvrez d’abord la fiche d’un arbre', 'warn');
+        return;
+    }
     document.getElementById('suivi-form').reset();
     clearPhotoInputs('suivi-photo');
     pendingSuiviPhotoFile = null;
