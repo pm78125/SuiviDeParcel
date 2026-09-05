@@ -300,6 +300,7 @@ function updateZoomControlsUi() {
 
     const btnIn = document.querySelector('#map-controls [data-map-action="zoom-in"]');
     const btnOut = document.querySelector('#map-controls [data-map-action="zoom-out"]');
+    const btnFit = document.querySelector('#map-controls [data-map-action="zoom-fit"]');
     if (btnIn) {
         btnIn.disabled = z >= maxZ - 0.5;
         btnIn.title = `Zoom + (${z} %)`;
@@ -307,6 +308,10 @@ function updateZoomControlsUi() {
     if (btnOut) {
         btnOut.disabled = z <= ZOOM_MIN + 0.5;
         btnOut.title = `Zoom − (${z} %)`;
+    }
+    if (btnFit) {
+        btnFit.disabled = Math.abs(z - 100) < 1;
+        btnFit.title = 'Ajuster à l’écran (100 %)';
     }
 }
 
@@ -319,6 +324,41 @@ window.changerZoom = function(delta) {
 };
 window.zoomIn = function() { applyZoom(zoomLevel * ZOOM_BTN_FACTOR); };
 window.zoomOut = function() { applyZoom(zoomLevel / ZOOM_BTN_FACTOR); };
+
+/** Recalcule la largeur « plein écran » du plan (fit contain). */
+function recalculateBaseMapWidth() {
+    const img = document.getElementById('map-image');
+    const area = document.getElementById('map-scroll-area');
+    if (!img?.naturalWidth || !area) return false;
+    const areaW = Math.max(area.clientWidth - 8, 100);
+    const areaH = Math.max(area.clientHeight - 8, 100);
+    const imgRatio = img.naturalWidth / img.naturalHeight;
+    const areaRatio = areaW / areaH;
+    if (imgRatio > areaRatio) window.baseMapWidth = areaW;
+    else window.baseMapWidth = areaH * imgRatio;
+    return true;
+}
+
+function centerMapInViewport() {
+    const area = document.getElementById('map-scroll-area');
+    if (!area) return;
+    requestAnimationFrame(() => {
+        area.scrollLeft = Math.max(0, (area.scrollWidth - area.clientWidth) / 2);
+        area.scrollTop = Math.max(0, (area.scrollHeight - area.clientHeight) / 2);
+    });
+}
+
+/** Revient à 100 % : plan qui occupe tout l’espace visible. */
+window.zoomFit = function() {
+    if (!recalculateBaseMapWidth()) return;
+    if (Math.abs(zoomLevel - 100) < 0.05) {
+        appliquerTransformations();
+        centerMapInViewport();
+        return;
+    }
+    applyZoom(100);
+    centerMapInViewport();
+};
 
 window.changerRotation = function(delta) {
     rotationDeg += delta;
@@ -362,6 +402,7 @@ function bindMapControlButtons() {
     const run = (action) => {
         if (action === 'zoom-in') window.zoomIn();
         else if (action === 'zoom-out') window.zoomOut();
+        else if (action === 'zoom-fit') window.zoomFit();
         else if (action === 'rotate') window.changerRotation(90);
     };
 
@@ -770,13 +811,7 @@ async function configurerCarte(forceReload = false) {
     img.onerror = function() { setMapEmpty(true); };
     img.onload = function() {
         setMapEmpty(false);
-        const area = document.getElementById('map-scroll-area');
-        const areaW = Math.max(area.clientWidth - 8, 100);
-        const areaH = Math.max(area.clientHeight - 8, 100);
-        const imgRatio = img.naturalWidth / img.naturalHeight;
-        const areaRatio = areaW / areaH;
-        if (imgRatio > areaRatio) window.baseMapWidth = areaW;
-        else window.baseMapWidth = areaH * imgRatio;
+        recalculateBaseMapWidth();
         zoomLevel = Math.max(ZOOM_MIN, Math.min(maxZoomLevel(), zoomLevel));
         appliquerTransformations();
         appliquerFiltres();

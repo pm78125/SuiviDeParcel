@@ -507,6 +507,16 @@ h1, h2, h3, h4, .display {
   user-select: none;
   pointer-events: none;
 }
+#map-controls .btn-icon--fit .zoom-fit-text {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--forest-deep);
+}
+#map-controls .btn-icon--fit:disabled {
+  opacity: 0.35;
+}
 #map-legend {
   position: absolute;
   bottom: 0.85rem;
