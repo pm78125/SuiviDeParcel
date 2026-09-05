@@ -2076,6 +2076,28 @@ table.inventory td.col-photo {
   }
   .modal-col--history { min-height: 16rem; }
 
+  .photo-field {
+    flex-wrap: wrap;
+  }
+  .photo-box {
+    width: 100%;
+    max-width: none;
+    height: 11rem;
+  }
+  .photo-actions {
+    flex-direction: row;
+    width: 100%;
+    align-self: stretch;
+  }
+  .photo-actions .photo-action-btn {
+    flex: 1;
+    min-height: 2.85rem;
+    font-size: 0.85rem;
+  }
+  .photo-actions--suivi .photo-action-btn {
+    min-width: 0;
+  }
+
   .modal-overlay,
   #arbre-modal-overlay { z-index: 170; }
   .modal-center { z-index: 175; }
