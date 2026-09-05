@@ -354,9 +354,9 @@
                   <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                   Ajouter une photo
                 </div>
-                <label class="photo-add-hit" for="form-photo" title="Ajouter ou changer la photo" aria-label="Ajouter ou changer la photo">
+                <label class="photo-add-hit" title="Ajouter ou changer la photo" aria-label="Ajouter ou changer la photo">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-                  <input type="file" id="form-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewMainPhoto(event)">
+                  <input type="file" id="form-photo" class="file-input-native" accept="image/*" onchange="previewMainPhoto(event)">
                 </label>
               </div>
               <div style="flex:1;min-width:0">
@@ -417,9 +417,10 @@
               <textarea id="form-notes" rows="3"></textarea>
             </div>
 
-            <div class="row-2" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
+            <div class="row-2 arbre-form-actions" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
               <button type="button" id="btn-delete-arbre" class="btn btn-danger hidden" onclick="supprimerArbre()">Supprimer l'arbre</button>
-              <button type="submit" class="btn btn-primary" style="flex:1">Enregistrer l'arbre</button>
+              <button type="submit" id="btn-save-arbre" class="btn btn-primary" style="flex:1">Enregistrer l'arbre</button>
+              <p id="arbre-save-status" class="arbre-save-status hidden" aria-live="polite">Enregistrement automatique</p>
             </div>
           </form>
         </div>
@@ -484,12 +485,12 @@
 
         <div class="field photo-picker-block">
           <span class="photo-picker-label">Photo de l'étape</span>
-          <label class="photo-pick-tile" for="suivi-photo" id="suivi-photo-tile">
+          <label class="photo-pick-tile" id="suivi-photo-tile">
             <span class="photo-pick-tile__plus" aria-hidden="true">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             </span>
             <span id="suivi-photo-name" class="photo-pick-tile__text">Ajouter une photo</span>
-            <input type="file" id="suivi-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewSuiviPhoto(event)">
+            <input type="file" id="suivi-photo" class="file-input-native" accept="image/*" onchange="previewSuiviPhoto(event)">
           </label>
         </div>
 

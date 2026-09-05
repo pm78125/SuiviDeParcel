@@ -192,34 +192,93 @@ function parseTailleToCm(val) {
     return null;
 }
 
-async function compressImage(file, maxSize = 1600, quality = 0.82) {
-    if (!file || !file.type.startsWith('image/')) return file;
+async function fileToDrawable(file, maxSide = 1600) {
+    // Redimensionne dès le décodage (évite OOM sur photos Samsung 12+ MP)
     try {
-        const bitmap = await createImageBitmap(file);
-        let { width, height } = bitmap;
-        const scale = Math.min(1, maxSize / Math.max(width, height));
-        width = Math.round(width * scale);
-        height = Math.round(height * scale);
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(bitmap, 0, 0, width, height);
-        bitmap.close?.();
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
-        if (!blob) return file;
-        const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
-        return new File([blob], `${base}.jpg`, { type: 'image/jpeg' });
-    } catch (e) {
-        console.warn('Compression impossible, envoi brut', e);
-        return file;
+        return await createImageBitmap(file, {
+            resizeWidth: maxSide,
+            resizeHeight: maxSide,
+            resizeQuality: 'high',
+        });
+    } catch (_) { /* API non supportée ou format */ }
+    try {
+        return await createImageBitmap(file);
+    } catch (_) { /* HEIC / WebView */ }
+    return new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('Impossible de lire l’image'));
+        };
+        img.src = url;
+    });
+}
+
+function isLikelyImageFile(file) {
+    if (!file) return false;
+    const type = (file.type || '').toLowerCase();
+    if (type.startsWith('image/')) return true;
+    // Android (Samsung…) envoie parfois un type vide / octet-stream
+    if (!type || type === 'application/octet-stream') return true;
+    return /\.(jpe?g|png|webp|gif|heic|heif|bmp|tif?f)$/i.test(file.name || '');
+}
+
+async function compressImage(file, maxSize = 1600, quality = 0.82) {
+    if (!file || !isLikelyImageFile(file)) return file;
+    const trySizes = [maxSize, 1280, 1024, 800];
+    for (const size of trySizes) {
+        try {
+            const drawable = await fileToDrawable(file, size);
+            const srcW = drawable.naturalWidth || drawable.width;
+            const srcH = drawable.naturalHeight || drawable.height;
+            if (!srcW || !srcH) throw new Error('dimensions invalides');
+            let width = srcW;
+            let height = srcH;
+            const scale = Math.min(1, size / Math.max(width, height));
+            width = Math.max(1, Math.round(width * scale));
+            height = Math.max(1, Math.round(height * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) throw new Error('canvas 2d indisponible');
+            ctx.drawImage(drawable, 0, 0, width, height);
+            drawable.close?.();
+            const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
+            if (!blob) throw new Error('toBlob vide');
+            const base = (file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo';
+            try {
+                return new File([blob], `${base}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+            } catch (_) {
+                // Certains Android refusent new File() — Blob suffit pour Storage
+                blob.name = `${base}.jpg`;
+                return blob;
+            }
+        } catch (e) {
+            console.warn('Compression échouée à', size, e);
+        }
     }
+    console.warn('Compression impossible, envoi brut');
+    return file;
 }
 
 async function uploadPhoto(file, prefix) {
     const compressed = await compressImage(file);
-    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
-    const { error } = await supabase.storage.from('photos').upload(fileName, compressed, { cacheControl: '3600', contentType: 'image/jpeg' });
+    const type = (compressed.type && compressed.type.startsWith('image/'))
+        ? compressed.type
+        : 'image/jpeg';
+    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+    const { error } = await supabase.storage.from('photos').upload(fileName, compressed, {
+        cacheControl: '3600',
+        contentType: type,
+        upsert: false,
+    });
     if (error) throw error;
     return supabase.storage.from('photos').getPublicUrl(fileName).data.publicUrl;
 }
@@ -726,6 +785,7 @@ async function initialiserApp() {
     showLoader(true);
     initModalsDismiss();
     bindMapControlButtons();
+    bindArbreAutosave();
     setOfflineBanner(!isOnline());
     onConnectivityChange(async (online) => {
         setOfflineBanner(!online);
@@ -1609,6 +1669,7 @@ async function fetchHistorique(arbreId) {
 window.ouvrirFormulaireSuivi = function() {
     document.getElementById('suivi-form').reset();
     clearPhotoInputs('suivi-photo');
+    pendingSuiviPhotoFile = null;
     const nameEl = document.getElementById('suivi-photo-name');
     if (nameEl) nameEl.textContent = 'Ajouter une photo';
     document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
@@ -1624,6 +1685,7 @@ window.editerSuivi = function(suiviId) {
     if (!suivi) return;
     document.getElementById('suivi-form').reset();
     clearPhotoInputs('suivi-photo');
+    pendingSuiviPhotoFile = null;
     const nameEl = document.getElementById('suivi-photo-name');
     if (nameEl) nameEl.textContent = 'Ajouter une photo';
     document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
@@ -1648,13 +1710,15 @@ window.sauvegarderSuivi = async function(e) {
     btnSubmit.disabled = true;
 
     const id = document.getElementById('suivi-id').value;
-    const photoFile = firstSelectedFile('suivi-photo');
+    const photoFile = pendingSuiviPhotoFile || firstSelectedFile('suivi-photo');
     const suiviExistant = id ? tousLesSuivisGlobaux.find(s => s.id === id) : null;
     let finalImageUrl = suiviExistant ? suiviExistant.image_url : null;
 
     try {
         if (photoFile) {
             finalImageUrl = await uploadPhoto(photoFile, 'suivi');
+            pendingSuiviPhotoFile = null;
+            clearPhotoInputs('suivi-photo');
         }
 
         const donneesSuivi = {
@@ -1709,6 +1773,8 @@ window.ouvrirModalArbre = function(donnees) {
 
     document.getElementById('arbre-form').reset();
     clearPhotoInputs('form-photo');
+    pendingArbrePhotoFile = null;
+    suppressArbreAutosave = true;
 
     document.getElementById('panel-title').textContent = isNew ? 'Nouveau point' : "Détails de l'arbre";
     document.getElementById('form-id').value = donnees.id || '';
@@ -1753,12 +1819,16 @@ window.ouvrirModalArbre = function(donnees) {
         fetchHistorique(donnees.id);
     }
 
+    syncArbreSaveUi(isNew);
+
     document.getElementById('arbre-modal-overlay').classList.remove('hidden');
     document.getElementById('arbre-modal').classList.remove('hidden');
     requestAnimationFrame(() => {
         document.getElementById('arbre-modal-content').classList.add('is-open');
+        suppressArbreAutosave = false;
     });
     } catch (err) {
+        suppressArbreAutosave = false;
         console.error('ouvrirModalArbre', err);
         showToast('Impossible d’ouvrir la fiche arbre', 'danger');
     }
@@ -1766,12 +1836,16 @@ window.ouvrirModalArbre = function(donnees) {
 
 window.fermerModalArbre = function() {
     clearTooltip();
+    clearTimeout(arbreAutosaveTimer);
+    pendingArbrePhotoFile = null;
+    suppressArbreAutosave = true;
     const content = document.getElementById('arbre-modal-content');
     content.classList.remove('is-open');
 
     setTimeout(() => {
         document.getElementById('arbre-modal-overlay').classList.add('hidden');
         document.getElementById('arbre-modal').classList.add('hidden');
+        suppressArbreAutosave = false;
     }, 200);
 
     arbreSelectionne = null;
@@ -1786,6 +1860,13 @@ function firstSelectedFile(...ids) {
     return null;
 }
 
+let pendingArbrePhotoFile = null;
+let pendingSuiviPhotoFile = null;
+let suppressArbreAutosave = false;
+let arbreAutosaveTimer = null;
+let arbreSaveInFlight = false;
+let arbreSaveQueued = false;
+
 function clearPhotoInputs(...ids) {
     ids.forEach((id) => {
         const el = document.getElementById(id);
@@ -1793,61 +1874,131 @@ function clearPhotoInputs(...ids) {
     });
 }
 
+function setArbreSaveStatus(text, state = '') {
+    const el = document.getElementById('arbre-save-status');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove('is-saving', 'is-saved', 'is-error');
+    if (state) el.classList.add(state);
+}
+
+function syncArbreSaveUi(isNew) {
+    const btnSave = document.getElementById('btn-save-arbre');
+    const status = document.getElementById('arbre-save-status');
+    if (isNew) {
+        btnSave?.classList.remove('hidden');
+        status?.classList.add('hidden');
+    } else {
+        btnSave?.classList.add('hidden');
+        status?.classList.remove('hidden');
+        setArbreSaveStatus('Enregistrement automatique');
+    }
+}
+
+function scheduleArbreAutosave() {
+    if (suppressArbreAutosave) return;
+    const id = document.getElementById('form-id')?.value;
+    if (!id) return;
+    setArbreSaveStatus('Modification…', 'is-saving');
+    clearTimeout(arbreAutosaveTimer);
+    arbreAutosaveTimer = setTimeout(() => {
+        persisterArbre({ silent: true, source: 'autosave' });
+    }, 650);
+}
+
+function bindArbreAutosave() {
+    const form = document.getElementById('arbre-form');
+    if (!form || form.dataset.autosaveBound === '1') return;
+    form.dataset.autosaveBound = '1';
+    const onEdit = (e) => {
+        if (e.target?.id === 'form-photo') return;
+        scheduleArbreAutosave();
+    };
+    form.addEventListener('input', onEdit);
+    form.addEventListener('change', onEdit);
+}
+
 window.previewMainPhoto = function(event) {
     const file = event.target.files?.[0];
     if (!file) return;
+    pendingArbrePhotoFile = file;
     const src = URL.createObjectURL(file);
-    document.getElementById('form-photo-preview').src = src;
-    document.getElementById('form-photo-preview').classList.remove('hidden');
+    const preview = document.getElementById('form-photo-preview');
+    preview.src = src;
+    preview.classList.remove('hidden');
     document.getElementById('form-photo-placeholder').classList.add('hidden');
     document.getElementById('form-photo-box')?.classList.add('has-photo');
-}
+
+    if (document.getElementById('form-id')?.value) {
+        setArbreSaveStatus('Envoi de la photo…', 'is-saving');
+        persisterArbre({ silent: true, source: 'photo' });
+    } else {
+        showToast('Photo prête — enregistrez l’arbre');
+    }
+};
 
 window.previewSuiviPhoto = function(event) {
     const file = event.target.files?.[0];
     const nameEl = document.getElementById('suivi-photo-name');
     const tile = document.getElementById('suivi-photo-tile');
     if (!file) {
+        pendingSuiviPhotoFile = null;
         if (nameEl) nameEl.textContent = 'Ajouter une photo';
         tile?.classList.remove('has-file');
         return;
     }
+    pendingSuiviPhotoFile = file;
     if (nameEl) nameEl.textContent = file.name || 'Photo sélectionnée';
     tile?.classList.add('has-file');
-}
+};
 
-window.sauvegarderArbre = async function(e) {
-    e.preventDefault();
-    if (!assertOnline('enregistrement')) return;
-    const btnSubmit = e.target.querySelector('button[type="submit"]');
-    const originalText = btnSubmit.textContent;
-    btnSubmit.textContent = '…';
-    btnSubmit.disabled = true;
+async function persisterArbre({ silent = false, source = 'manual' } = {}) {
+    if (!assertOnline('enregistrement')) return false;
+
+    if (arbreSaveInFlight) {
+        arbreSaveQueued = true;
+        return false;
+    }
+    arbreSaveInFlight = true;
+
+    const btnSubmit = document.getElementById('btn-save-arbre');
+    const originalText = btnSubmit?.textContent || 'Enregistrer l\'arbre';
+    if (!silent && btnSubmit) {
+        btnSubmit.textContent = '…';
+        btnSubmit.disabled = true;
+    }
+    if (silent) {
+        setArbreSaveStatus(source === 'photo' ? 'Envoi de la photo…' : 'Enregistrement…', 'is-saving');
+    }
 
     const id = document.getElementById('form-id').value;
-    const photoFile = firstSelectedFile('form-photo');
+    const photoFile = pendingArbrePhotoFile || firstSelectedFile('form-photo');
     let finalImageUrl = arbreSelectionne ? arbreSelectionne.image_url : null;
 
     const espece = document.getElementById('form-espece').value.trim();
     if (!espece) {
-        showToast('Indiquez une espèce', 'warn');
-        btnSubmit.textContent = originalText;
-        btnSubmit.disabled = false;
-        return;
+        if (!silent) showToast('Indiquez une espèce', 'warn');
+        else setArbreSaveStatus('Espèce requise', 'is-error');
+        if (btnSubmit) { btnSubmit.textContent = originalText; btnSubmit.disabled = false; }
+        arbreSaveInFlight = false;
+        return false;
     }
 
     let xVal = parseFloat(document.getElementById('form-x').value);
     let yVal = parseFloat(document.getElementById('form-y').value);
     if (Number.isNaN(xVal) || Number.isNaN(yVal)) {
-        showToast('Position invalide — replacez l’arbre sur le plan', 'danger');
-        btnSubmit.textContent = originalText;
-        btnSubmit.disabled = false;
-        return;
+        if (!silent) showToast('Position invalide — replacez l’arbre sur le plan', 'danger');
+        else setArbreSaveStatus('Position invalide', 'is-error');
+        if (btnSubmit) { btnSubmit.textContent = originalText; btnSubmit.disabled = false; }
+        arbreSaveInFlight = false;
+        return false;
     }
 
     try {
         if (photoFile) {
             finalImageUrl = await uploadPhoto(photoFile, 'arbre');
+            pendingArbrePhotoFile = null;
+            clearPhotoInputs('form-photo');
         }
 
         const donneesArbre = {
@@ -1872,7 +2023,6 @@ window.sauvegarderArbre = async function(e) {
             const { data, error } = await supabase.from('arbres').insert([donneesArbre]).select();
             if (error) throw error;
             returnedTree = data && data[0];
-            // Si RLS empêche le SELECT après insert, on recharge la liste
             if (!returnedTree) {
                 await fetchArbres();
                 returnedTree = tousLesArbres.find(a =>
@@ -1884,25 +2034,61 @@ window.sauvegarderArbre = async function(e) {
         }
 
         await fetchArbres();
-        btnSubmit.textContent = 'Sauvegardé';
-        showToast(id ? 'Arbre mis à jour' : 'Arbre ajouté');
-        setTimeout(() => { btnSubmit.textContent = originalText; btnSubmit.disabled = false; }, 1200);
 
-        if (!id && returnedTree) ouvrirModalArbre(returnedTree);
-        else if (id && returnedTree) {
+        if (returnedTree) {
             arbreSelectionne = returnedTree;
-            fetchHistorique(id);
-        } else if (!id) {
-            fermerModalArbre();
+            if (!id) {
+                suppressArbreAutosave = true;
+                document.getElementById('form-id').value = returnedTree.id;
+                document.getElementById('panel-title').textContent = "Détails de l'arbre";
+                syncArbreSaveUi(false);
+                document.getElementById('section-historique')?.classList.remove('hidden');
+                document.getElementById('btn-delete-arbre')?.classList.remove('hidden');
+                fetchHistorique(returnedTree.id);
+                suppressArbreAutosave = false;
+            }
         }
+
+        if (silent) {
+            setArbreSaveStatus(source === 'photo' ? 'Photo enregistrée' : 'Enregistré', 'is-saved');
+            if (source === 'photo') showToast('Photo enregistrée');
+        } else {
+            if (btnSubmit) btnSubmit.textContent = 'Sauvegardé';
+            showToast(id ? 'Arbre mis à jour' : 'Arbre ajouté');
+            setTimeout(() => {
+                if (btnSubmit) {
+                    btnSubmit.textContent = originalText;
+                    btnSubmit.disabled = false;
+                }
+            }, 1200);
+            if (!id && !returnedTree) fermerModalArbre();
+        }
+
+        if (id && returnedTree) fetchHistorique(id);
+        return true;
     } catch (err) {
         console.error(err);
         const msg = err?.message || err?.error_description || 'Erreur de sauvegarde';
         showToast(msg, 'danger');
-        btnSubmit.textContent = originalText;
-        btnSubmit.disabled = false;
+        if (silent) setArbreSaveStatus('Échec — réessayez', 'is-error');
+        if (btnSubmit) {
+            btnSubmit.textContent = originalText;
+            btnSubmit.disabled = false;
+        }
+        return false;
+    } finally {
+        arbreSaveInFlight = false;
+        if (arbreSaveQueued) {
+            arbreSaveQueued = false;
+            scheduleArbreAutosave();
+        }
     }
 }
+
+window.sauvegarderArbre = async function(e) {
+    e.preventDefault();
+    await persisterArbre({ silent: false, source: 'manual' });
+};
 
 window.supprimerArbre = async function() {
     if (!arbreSelectionne) return;

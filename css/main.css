@@ -1360,11 +1360,27 @@ table.inventory td.col-photo {
   color: var(--moss);
   background: transparent;
   -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+/* Android/Samsung ignore souvent les input file à opacity:0 — garder une opacité minime + grande zone tactile */
+.file-input-native {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.011;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+  font-size: 64px; /* agrandit la zone cliquable (quirk WebKit/Blink mobile) */
+  z-index: 3;
+  -webkit-tap-highlight-color: transparent;
 }
 .photo-box:not(.has-photo) .photo-add-hit {
   color: transparent;
 }
-.photo-box:not(.has-photo) .photo-add-hit .icon {
+.photo-box:not(.has-photo) .photo-add-hit > .icon {
   display: none;
 }
 .photo-box.has-photo .photo-add-hit {
@@ -1379,9 +1395,12 @@ table.inventory td.col-photo {
   border: 1px solid var(--line);
   box-shadow: 0 4px 12px rgba(15, 61, 46, 0.12);
 }
-.photo-box.has-photo .photo-add-hit .icon {
+.photo-box.has-photo .photo-add-hit > .icon {
   width: 1.05rem;
   height: 1.05rem;
+  pointer-events: none;
+  position: relative;
+  z-index: 1;
 }
 @media (hover: hover) and (pointer: fine) {
   .photo-box.has-photo:hover .photo-add-hit,
@@ -1395,27 +1414,15 @@ table.inventory td.col-photo {
     color: #fff;
     background: rgba(15, 61, 46, 0.42);
   }
-  .photo-box.has-photo:hover .photo-add-hit .icon,
-  .photo-box.has-photo:focus-within .photo-add-hit .icon {
+  .photo-box.has-photo:hover .photo-add-hit > .icon,
+  .photo-box.has-photo:focus-within .photo-add-hit > .icon {
     width: 1.6rem;
     height: 1.6rem;
   }
 }
 
-.photo-picker-block {
-  background: var(--mist);
-  border: 1px solid var(--line);
-  border-radius: 0.9rem;
-  padding: 0.85rem;
-}
-.photo-picker-label {
-  display: block;
-  font-size: 0.78rem;
-  font-weight: 700;
-  color: var(--ink-soft);
-  margin-bottom: 0.55rem;
-}
 .photo-pick-tile {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0.65rem;
@@ -1428,6 +1435,10 @@ table.inventory td.col-photo {
   color: var(--ink-soft);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  overflow: hidden;
+}
+.photo-pick-tile .file-input-native {
+  z-index: 2;
 }
 .photo-pick-tile:hover,
 .photo-pick-tile:focus-within {
@@ -1447,6 +1458,9 @@ table.inventory td.col-photo {
   border-radius: 999px;
   background: rgba(47, 154, 106, 0.12);
   color: var(--moss);
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
 .photo-pick-tile__plus .icon {
   width: 1.05rem;
@@ -1458,7 +1472,40 @@ table.inventory td.col-photo {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  position: relative;
+  z-index: 1;
+  pointer-events: none;
 }
+
+.photo-picker-block {
+  background: var(--mist);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  padding: 0.85rem;
+}
+.photo-picker-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-bottom: 0.55rem;
+}
+
+.arbre-form-actions {
+  align-items: center;
+}
+.arbre-save-status {
+  flex: 1;
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+  text-align: right;
+}
+.arbre-save-status.is-saving { color: var(--moss); }
+.arbre-save-status.is-saved { color: var(--forest-deep); }
+.arbre-save-status.is-error { color: #b42318; }
+.arbre-save-status.hidden { display: none !important; }
 
 .map-tip {
   position: fixed;
