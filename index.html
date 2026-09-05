@@ -343,16 +343,24 @@
             <input type="hidden" id="form-x">
             <input type="hidden" id="form-y">
 
-            <div class="row-2" style="align-items:flex-start;margin-bottom:0.9rem">
+            <div class="photo-field">
               <div class="photo-box">
                 <img id="form-photo-preview" src="" alt="" class="hidden" onclick="ouvrirLightbox(this.src)">
                 <div id="form-photo-placeholder" class="photo-placeholder">
                   <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
                   Pas de photo
                 </div>
-                <label class="photo-change">
-                  Changer
-                  <input type="file" id="form-photo" accept="image/*" class="hidden" onchange="previewMainPhoto(event)">
+              </div>
+              <div class="photo-actions">
+                <label class="btn btn-ghost photo-action-btn">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5-8 8"/></svg>
+                  Galerie
+                  <input type="file" id="form-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewMainPhoto(event)">
+                </label>
+                <label class="btn btn-ghost photo-action-btn">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+                  Appareil
+                  <input type="file" id="form-photo-camera" accept="image/*" capture="environment" class="hidden" onchange="previewMainPhoto(event)">
                 </label>
               </div>
               <div style="flex:1;min-width:0">
@@ -478,9 +486,21 @@
           <textarea id="suivi-notes" rows="3" placeholder="Taille, maladie, arrosage…"></textarea>
         </div>
 
-        <div class="field" style="background:var(--mist);border:1px solid var(--line);border-radius:0.9rem;padding:0.85rem">
-          <label for="suivi-photo">Photo de l'étape</label>
-          <input type="file" id="suivi-photo" accept="image/*">
+        <div class="field photo-picker-block">
+          <span class="photo-picker-label">Photo de l'étape</span>
+          <div class="photo-actions photo-actions--suivi">
+            <label class="btn btn-ghost photo-action-btn">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5-8 8"/></svg>
+              Galerie
+              <input type="file" id="suivi-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewSuiviPhoto(event)">
+            </label>
+            <label class="btn btn-ghost photo-action-btn">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+              Appareil
+              <input type="file" id="suivi-photo-camera" accept="image/*" capture="environment" class="hidden" onchange="previewSuiviPhoto(event)">
+            </label>
+          </div>
+          <p id="suivi-photo-name" class="photo-file-name hidden"></p>
         </div>
 
         <div class="row-2" style="margin-top:0.75rem">

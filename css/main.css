@@ -1289,20 +1289,60 @@ table.inventory td.col-photo {
   pointer-events: none;
 }
 .photo-placeholder.hidden { display: none; }
-.photo-change {
-  position: absolute;
-  bottom: 0;
-  inset-inline: 0;
-  background: rgba(0,0,0,0.55);
-  color: #fff;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-align: center;
-  padding: 0.35rem;
-  opacity: 0;
+
+.photo-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+.photo-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  align-self: center;
+}
+.photo-action-btn {
+  min-height: 2.5rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
   cursor: pointer;
 }
-.photo-box:hover .photo-change { opacity: 1; }
+.photo-action-btn .icon {
+  width: 1rem;
+  height: 1rem;
+}
+.photo-picker-block {
+  background: var(--mist);
+  border: 1px solid var(--line);
+  border-radius: 0.9rem;
+  padding: 0.85rem;
+}
+.photo-picker-label {
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-bottom: 0.55rem;
+}
+.photo-actions--suivi {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.photo-actions--suivi .photo-action-btn {
+  flex: 1;
+  min-width: 7.5rem;
+}
+.photo-file-name {
+  margin: 0.55rem 0 0;
+  font-size: 0.78rem;
+  color: var(--forest);
+  font-weight: 600;
+  word-break: break-all;
+}
+.photo-file-name.hidden { display: none; }
 
 .map-tip {
   position: fixed;

@@ -1532,6 +1532,8 @@ async function fetchHistorique(arbreId) {
 
 window.ouvrirFormulaireSuivi = function() {
     document.getElementById('suivi-form').reset();
+    clearPhotoInputs('suivi-photo', 'suivi-photo-camera');
+    document.getElementById('suivi-photo-name')?.classList.add('hidden');
     document.getElementById('suivi-id').value = '';
     document.getElementById('suivi-arbre-id').value = arbreSelectionne.id;
     document.getElementById('suivi-date').value = new Date().toISOString().split('T')[0];
@@ -1543,6 +1545,8 @@ window.editerSuivi = function(suiviId) {
     const suivi = tousLesSuivisGlobaux.find(s => s.id === suiviId);
     if (!suivi) return;
     document.getElementById('suivi-form').reset();
+    clearPhotoInputs('suivi-photo', 'suivi-photo-camera');
+    document.getElementById('suivi-photo-name')?.classList.add('hidden');
     document.getElementById('suivi-id').value = suivi.id;
     document.getElementById('suivi-arbre-id').value = suivi.arbre_id;
     document.getElementById('suivi-date').value = suivi.date_suivi;
@@ -1564,13 +1568,13 @@ window.sauvegarderSuivi = async function(e) {
     btnSubmit.disabled = true;
 
     const id = document.getElementById('suivi-id').value;
-    const photoInput = document.getElementById('suivi-photo');
+    const photoFile = firstSelectedFile('suivi-photo', 'suivi-photo-camera');
     const suiviExistant = id ? tousLesSuivisGlobaux.find(s => s.id === id) : null;
     let finalImageUrl = suiviExistant ? suiviExistant.image_url : null;
 
     try {
-        if (photoInput.files.length > 0) {
-            finalImageUrl = await uploadPhoto(photoInput.files[0], 'suivi');
+        if (photoFile) {
+            finalImageUrl = await uploadPhoto(photoFile, 'suivi');
         }
 
         const donneesSuivi = {
@@ -1624,7 +1628,7 @@ window.ouvrirModalArbre = function(donnees) {
     });
 
     document.getElementById('arbre-form').reset();
-    document.getElementById('form-photo').value = '';
+    clearPhotoInputs('form-photo', 'form-photo-camera');
 
     document.getElementById('panel-title').textContent = isNew ? 'Nouveau point' : "Détails de l'arbre";
     document.getElementById('form-id').value = donnees.id || '';
@@ -1691,12 +1695,57 @@ window.fermerModalArbre = function() {
     document.querySelectorAll('.tree-marker.active').forEach(m => m.classList.remove('active'));
 }
 
+function assignFileToInput(inputEl, file) {
+    if (!inputEl || !file) return;
+    try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        inputEl.files = dt.files;
+    } catch (_) { /* certains WebViews refusent DataTransfer */ }
+}
+
+function firstSelectedFile(...ids) {
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el?.files?.length) return el.files[0];
+    }
+    return null;
+}
+
+function clearPhotoInputs(...ids) {
+    ids.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+}
+
 window.previewMainPhoto = function(event) {
-    if (event.target.files.length > 0) {
-        const src = URL.createObjectURL(event.target.files[0]);
-        document.getElementById('form-photo-preview').src = src;
-        document.getElementById('form-photo-preview').classList.remove('hidden');
-        document.getElementById('form-photo-placeholder').classList.add('hidden');
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const main = document.getElementById('form-photo');
+    const cam = document.getElementById('form-photo-camera');
+    if (event.target === cam && main) assignFileToInput(main, file);
+    if (event.target === main && cam) cam.value = '';
+    const src = URL.createObjectURL(file);
+    document.getElementById('form-photo-preview').src = src;
+    document.getElementById('form-photo-preview').classList.remove('hidden');
+    document.getElementById('form-photo-placeholder').classList.add('hidden');
+}
+
+window.previewSuiviPhoto = function(event) {
+    const file = event.target.files?.[0];
+    const nameEl = document.getElementById('suivi-photo-name');
+    if (!file) {
+        nameEl?.classList.add('hidden');
+        return;
+    }
+    const main = document.getElementById('suivi-photo');
+    const cam = document.getElementById('suivi-photo-camera');
+    if (event.target === cam && main) assignFileToInput(main, file);
+    if (event.target === main && cam) cam.value = '';
+    if (nameEl) {
+        nameEl.textContent = file.name || 'Photo sélectionnée';
+        nameEl.classList.remove('hidden');
     }
 }
 
@@ -1709,7 +1758,7 @@ window.sauvegarderArbre = async function(e) {
     btnSubmit.disabled = true;
 
     const id = document.getElementById('form-id').value;
-    const photoInput = document.getElementById('form-photo');
+    const photoFile = firstSelectedFile('form-photo', 'form-photo-camera');
     let finalImageUrl = arbreSelectionne ? arbreSelectionne.image_url : null;
 
     const espece = document.getElementById('form-espece').value.trim();
@@ -1730,8 +1779,8 @@ window.sauvegarderArbre = async function(e) {
     }
 
     try {
-        if (photoInput.files.length > 0) {
-            finalImageUrl = await uploadPhoto(photoInput.files[0], 'arbre');
+        if (photoFile) {
+            finalImageUrl = await uploadPhoto(photoFile, 'arbre');
         }
 
         const donneesArbre = {
