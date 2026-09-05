@@ -192,28 +192,75 @@ function parseTailleToCm(val) {
     return null;
 }
 
-async function fileToDrawable(file, maxSide = 1600) {
-    const orient = { imageOrientation: 'from-image' };
-    // 1) Décodage normal (respecte EXIF — crucial sur Samsung)
+/** Copie immédiate en mémoire (caméra + galerie Samsung invalident souvent le File). */
+async function readFileAsArrayBuffer(file) {
     try {
-        const full = await createImageBitmap(file, orient);
-        const side = Math.max(full.width, full.height);
-        if (side <= maxSide) return full;
-        // 2) Redimensionne en gardant le ratio (une seule dimension — pas les deux)
-        const opts = { ...orient, resizeQuality: 'high' };
-        if (full.width >= full.height) opts.resizeWidth = maxSide;
-        else opts.resizeHeight = maxSide;
-        full.close?.();
+        return await file.arrayBuffer();
+    } catch (e) {
+        console.warn('arrayBuffer échoué, fallback FileReader', e);
+    }
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Impossible de lire la photo — réessayez'));
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+async function materializePhotoFile(file) {
+    if (!file) throw new Error('Aucune photo');
+
+    // Galerie cloud / caméra S20 : taille 0 puis remplie, ou qui change pendant le téléchargement
+    let prev = -1;
+    for (let i = 0; i < 15; i++) {
+        const size = file.size || 0;
+        if (size > 0 && size === prev) break;
+        prev = size;
+        await new Promise((r) => setTimeout(r, 120));
+    }
+    if (!file.size) throw new Error('Photo vide — réessayez (attendez la fin du chargement galerie)');
+
+    const buffer = await readFileAsArrayBuffer(file);
+    if (!buffer || !buffer.byteLength) throw new Error('Photo illisible');
+
+    const name = (file.name || '').toLowerCase();
+    const rawType = (file.type || '').toLowerCase();
+    // Forcer un type image utilisable (galerie Samsung envoie parfois vide / octet-stream / heic)
+    let type = 'image/jpeg';
+    if (rawType.startsWith('image/') && !rawType.includes('heic') && !rawType.includes('heif')) {
+        type = rawType === 'image/jpg' ? 'image/jpeg' : rawType;
+    } else if (/\.png$/i.test(name)) type = 'image/png';
+    else if (/\.webp$/i.test(name)) type = 'image/webp';
+    else if (/\.heic$|\.heif$/i.test(name) || rawType.includes('heic') || rawType.includes('heif')) {
+        type = 'image/heic'; // sera recompressé en JPEG si le décodage marche
+    }
+
+    const base = ((file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo').slice(0, 40);
+    try {
+        return new File([buffer], `${base}.bin`, { type, lastModified: Date.now() });
+    } catch (_) {
+        return new Blob([buffer], { type });
+    }
+}
+
+/**
+ * Décode sans charger la pleine résolution (OOM fréquent S20 / 12+ MP).
+ * Une seule dimension de resize pour préserver le ratio.
+ */
+async function fileToDrawable(file, maxSide = 1280) {
+    const attempts = [
+        { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
+        { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'medium' },
+        { resizeWidth: maxSide, resizeQuality: 'low' },
+        { resizeHeight: maxSide, resizeQuality: 'low' },
+        { imageOrientation: 'from-image' },
+        {},
+    ];
+    for (const opts of attempts) {
         try {
             return await createImageBitmap(file, opts);
-        } catch (_) {
-            return createImageBitmap(file, orient);
-        }
-    } catch (_) { /* API / format */ }
-
-    try {
-        return await createImageBitmap(file);
-    } catch (_) { /* HEIC / WebView */ }
+        } catch (_) { /* essai suivant */ }
+    }
 
     return new Promise((resolve, reject) => {
         const url = URL.createObjectURL(file);
@@ -234,58 +281,86 @@ function isLikelyImageFile(file) {
     if (!file) return false;
     const type = (file.type || '').toLowerCase();
     if (type.startsWith('image/')) return true;
-    // Android (Samsung…) envoie parfois un type vide / octet-stream
     if (!type || type === 'application/octet-stream') return true;
     return /\.(jpe?g|png|webp|gif|heic|heif|bmp|tif?f)$/i.test(file.name || '');
 }
 
-async function compressImage(file, maxSize = 1600, quality = 0.82) {
+function preferredPhotoMaxSize(file) {
+    // Caméra Samsung = fichiers lourds → départ plus bas pour éviter le crash mémoire
+    const bytes = file?.size || 0;
+    if (bytes > 4_000_000) return 1024;
+    if (bytes > 2_000_000) return 1280;
+    return 1600;
+}
+
+async function compressImage(file, maxSize = null, quality = 0.8) {
     if (!file || !isLikelyImageFile(file)) return file;
-    const trySizes = [maxSize, 1280, 1024, 800];
+    const startSize = maxSize || preferredPhotoMaxSize(file);
+    const trySizes = [...new Set([startSize, 1280, 1024, 800, 640])];
+    const qualities = [quality, 0.72, 0.6];
+
     for (const size of trySizes) {
-        try {
-            const drawable = await fileToDrawable(file, size);
-            const srcW = drawable.naturalWidth || drawable.width;
-            const srcH = drawable.naturalHeight || drawable.height;
-            if (!srcW || !srcH) throw new Error('dimensions invalides');
-            // Toujours recalculer le ratio depuis les dimensions réelles (jamais forcer un carré)
-            const scale = Math.min(1, size / Math.max(srcW, srcH));
-            const width = Math.max(1, Math.round(srcW * scale));
-            const height = Math.max(1, Math.round(srcH * scale));
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (!ctx) throw new Error('canvas 2d indisponible');
-            ctx.drawImage(drawable, 0, 0, width, height);
-            drawable.close?.();
-            const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
-            if (!blob) throw new Error('toBlob vide');
-            const base = (file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo';
+        for (const q of qualities) {
             try {
-                return new File([blob], `${base}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
-            } catch (_) {
-                blob.name = `${base}.jpg`;
-                return blob;
+                const drawable = await fileToDrawable(file, size);
+                const srcW = drawable.naturalWidth || drawable.width;
+                const srcH = drawable.naturalHeight || drawable.height;
+                if (!srcW || !srcH) {
+                    drawable.close?.();
+                    throw new Error('dimensions invalides');
+                }
+                const scale = Math.min(1, size / Math.max(srcW, srcH));
+                const width = Math.max(1, Math.round(srcW * scale));
+                const height = Math.max(1, Math.round(srcH * scale));
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d', { alpha: false });
+                if (!ctx) throw new Error('canvas 2d indisponible');
+                ctx.drawImage(drawable, 0, 0, width, height);
+                drawable.close?.();
+
+                let out = await new Promise((resolve) => {
+                    if (canvas.toBlob) canvas.toBlob(resolve, 'image/jpeg', q);
+                    else resolve(null);
+                });
+                // Fallback dataURL si toBlob échoue (certains WebViews Samsung)
+                if (!out) {
+                    const dataUrl = canvas.toDataURL('image/jpeg', q);
+                    const res = await fetch(dataUrl);
+                    out = await res.blob();
+                }
+                if (!out || !out.size) throw new Error('toBlob vide');
+
+                const base = ((file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo').slice(0, 40);
+                try {
+                    return new File([out], `${base}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
+                } catch (_) {
+                    return new Blob([out], { type: 'image/jpeg' });
+                }
+            } catch (e) {
+                console.warn('Compression échouée', size, q, e);
             }
-        } catch (e) {
-            console.warn('Compression échouée à', size, e);
         }
     }
-    console.warn('Compression impossible, envoi brut');
-    return file;
+    console.warn('Compression impossible');
+    const looksJpeg = /jpeg|jpg/i.test(file.type || '') || /\.jpe?g$/i.test(file.name || '');
+    if (looksJpeg && file.size && file.size < 8_000_000) return file;
+    throw new Error('Impossible de traiter cette photo — choisissez un JPEG dans la galerie');
 }
 
 async function uploadPhoto(file, prefix) {
-    const compressed = await compressImage(file);
-    const type = (compressed.type && compressed.type.startsWith('image/'))
-        ? compressed.type
-        : 'image/jpeg';
-    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+    // pending* est déjà une copie mémoire ; sinon on matérialise (galerie / caméra S20)
+    const ready = (file instanceof Blob && file.size > 0)
+        ? file
+        : await materializePhotoFile(file);
+    const compressed = await compressImage(ready);
+    if (!compressed || !compressed.size) throw new Error('Photo compressée vide');
+
+    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
     const { error } = await supabase.storage.from('photos').upload(fileName, compressed, {
         cacheControl: '3600',
-        contentType: type,
+        contentType: 'image/jpeg',
         upsert: false,
     });
     if (error) throw error;
@@ -2049,38 +2124,58 @@ function bindPhotoPickers() {
     wire('suivi-photo-tile', 'suivi-photo', (e) => window.previewSuiviPhoto(e));
 }
 
-window.previewMainPhoto = function(event) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    pendingArbrePhotoFile = file;
-    const src = URL.createObjectURL(file);
-    const preview = document.getElementById('form-photo-preview');
-    preview.src = src;
-    preview.classList.remove('hidden');
-    document.getElementById('form-photo-placeholder').classList.add('hidden');
-    document.getElementById('form-photo-box')?.classList.add('has-photo');
+window.previewMainPhoto = async function(event) {
+    const raw = event.target.files?.[0];
+    if (!raw) return;
 
-    if (document.getElementById('form-id')?.value) {
-        setArbreSaveStatus('Envoi de la photo…', 'is-saving');
-        persisterArbre({ silent: true, source: 'photo' });
-    } else {
-        showToast('Photo prête — enregistrez l’arbre');
+    try {
+        setArbreSaveStatus('Préparation de la photo…', 'is-saving');
+        // Copie immédiate en RAM : galerie + caméra S20 rendent le File d’origine souvent illisible ensuite
+        pendingArbrePhotoFile = await materializePhotoFile(raw);
+        const src = URL.createObjectURL(pendingArbrePhotoFile);
+        const preview = document.getElementById('form-photo-preview');
+        preview.src = src;
+        preview.classList.remove('hidden');
+        document.getElementById('form-photo-placeholder').classList.add('hidden');
+        document.getElementById('form-photo-box')?.classList.add('has-photo');
+
+        if (document.getElementById('form-id')?.value) {
+            setArbreSaveStatus('Envoi de la photo…', 'is-saving');
+            await persisterArbre({ silent: true, source: 'photo' });
+        } else {
+            setArbreSaveStatus('');
+            showToast('Photo prête — enregistrez l’arbre');
+        }
+    } catch (err) {
+        console.error(err);
+        pendingArbrePhotoFile = null;
+        setArbreSaveStatus('Échec photo', 'is-error');
+        showToast(err?.message || 'Impossible d’utiliser cette photo', 'danger');
     }
 };
 
-window.previewSuiviPhoto = function(event) {
-    const file = event.target.files?.[0];
+window.previewSuiviPhoto = async function(event) {
+    const raw = event.target.files?.[0];
     const nameEl = document.getElementById('suivi-photo-name');
     const tile = document.getElementById('suivi-photo-tile');
-    if (!file) {
+    if (!raw) {
         pendingSuiviPhotoFile = null;
         if (nameEl) nameEl.textContent = 'Ajouter une photo';
         tile?.classList.remove('has-file');
         return;
     }
-    pendingSuiviPhotoFile = file;
-    if (nameEl) nameEl.textContent = file.name || 'Photo sélectionnée';
-    tile?.classList.add('has-file');
+    try {
+        if (nameEl) nameEl.textContent = 'Préparation…';
+        pendingSuiviPhotoFile = await materializePhotoFile(raw);
+        if (nameEl) nameEl.textContent = raw.name || 'Photo sélectionnée';
+        tile?.classList.add('has-file');
+    } catch (err) {
+        console.error(err);
+        pendingSuiviPhotoFile = null;
+        if (nameEl) nameEl.textContent = 'Ajouter une photo';
+        tile?.classList.remove('has-file');
+        showToast(err?.message || 'Impossible d’utiliser cette photo', 'danger');
+    }
 };
 
 async function persisterArbre({ silent = false, source = 'manual' } = {}) {
