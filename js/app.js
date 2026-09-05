@@ -214,9 +214,10 @@ function sleep(ms) {
 
 function isHeicMagic(buffer) {
     if (!buffer || buffer.byteLength < 12) return false;
-    const u = new Uint8Array(buffer);
-    const ascii = String.fromCharCode(...u.slice(4, 16));
-    return ascii.startsWith('ftyp') && /heic|heif|mif1|msf1|heim|heis|hevx/i.test(ascii);
+    const u = new Uint8Array(buffer.slice(0, Math.min(64, buffer.byteLength)));
+    const ascii = String.fromCharCode(...u);
+    // Conteneur HEIF/HEIC Samsung (souvent 1816×4032 « Haute efficacité »)
+    return /ftyp/i.test(ascii) && /heic|heif|mif1|msf1|heim|heis|hevx/i.test(ascii);
 }
 
 function looksLikeHeic(file, buffer) {
@@ -234,6 +235,40 @@ function loadImageFromUrl(url) {
         img.onerror = () => reject(new Error('Décodage image impossible'));
         img.src = url;
     });
+}
+
+function preloadHeicConverter() {
+    if (typeof window === 'undefined') return;
+    if (window.heic2any || document.querySelector('script[data-heic2any]')) return;
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.async = true;
+    s.dataset.heic2any = '1';
+    document.head.appendChild(s);
+}
+
+async function ensureHeicConverter() {
+    if (window.heic2any) return window.heic2any;
+    preloadHeicConverter();
+    const t0 = Date.now();
+    while (Date.now() - t0 < 15000) {
+        if (window.heic2any) return window.heic2any;
+        await sleep(120);
+    }
+    throw new Error('Chargement convertisseur HEIC impossible');
+}
+
+/** S20 / anciens Samsung : proxy Galerie + HEIC + peu de RAM → pipeline plus prudent. */
+function isConstrainedPhotoDevice() {
+    try {
+        if (navigator.deviceMemory && navigator.deviceMemory <= 4) return true;
+    } catch (_) { /* ok */ }
+    const ua = navigator.userAgent || '';
+    if (/SM-G98[0-9]|SM-G991|SM-G780|SM-G781/i.test(ua)) return true; // S20 / S20 FE
+    if (/Android/i.test(ua) && /Samsung|SM-/i.test(ua) && /Android ([5-9]|1[0-2])\b/i.test(ua)) {
+        return true;
+    }
+    return false;
 }
 
 async function canvasToJpegBlob(canvas, quality) {
@@ -345,74 +380,57 @@ async function convertHeicToJpeg(blob) {
     const buffer = blob._buffer || null;
     if (!looksLikeHeic(blob, buffer)) return blob;
 
-    try {
-        if (!window.heic2any) {
-            await new Promise((resolve, reject) => {
-                const existing = document.querySelector('script[data-heic2any]');
-                if (existing) {
-                    existing.addEventListener('load', resolve);
-                    existing.addEventListener('error', reject);
-                    return;
-                }
-                const s = document.createElement('script');
-                s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
-                s.async = true;
-                s.dataset.heic2any = '1';
-                s.onload = resolve;
-                s.onerror = () => reject(new Error('Chargement convertisseur HEIC impossible'));
-                document.head.appendChild(s);
-            });
-        }
-        const result = await window.heic2any({
-            blob,
-            toType: 'image/jpeg',
-            quality: 0.72,
-        });
-        const jpeg = Array.isArray(result) ? result[0] : result;
-        if (!jpeg?.size) throw new Error('Conversion HEIC vide');
-        return new Blob([jpeg], { type: 'image/jpeg' });
-    } catch (e) {
-        console.warn('heic2any', e);
-        throw new Error('HEIC non supporté — désactivez « Haute efficacité » dans la caméra');
+    if (typeof setArbreSaveStatus === 'function') {
+        setArbreSaveStatus('Conversion HEIC → JPEG…', 'is-saving');
     }
+
+    const heic2any = await ensureHeicConverter();
+    // S20 : qualités plus basses d’abord (évite OOM sur HEIC 4–5 Mo / 1816×4032)
+    const qualities = isConstrainedPhotoDevice() ? [0.5, 0.4, 0.32] : [0.7, 0.55, 0.4];
+    let lastErr = null;
+
+    for (const quality of qualities) {
+        try {
+            const result = await heic2any({
+                blob,
+                toType: 'image/jpeg',
+                quality,
+            });
+            const jpeg = Array.isArray(result) ? result[0] : result;
+            if (jpeg?.size) {
+                try { delete blob._buffer; } catch (_) { /* ok */ }
+                return new Blob([jpeg], { type: 'image/jpeg' });
+            }
+        } catch (e) {
+            lastErr = e;
+            console.warn('heic2any q=' + quality, e);
+            await sleep(50);
+        }
+    }
+
+    console.warn('heic2any failed', lastErr);
+    throw new Error('HEIC — passez la caméra en JPEG (Réglages → Formats d’image)');
 }
 
 async function decodePhotoDrawable(file) {
     if (!file) throw new Error('Aucune photo');
-    const maxSide = 1280;
+    const constrained = isConstrainedPhotoDevice();
+    const maxSide = constrained ? 960 : 1280;
     const errors = [];
+    // Gros JPEG post-HEIC (ex. 1816×4032) : éviter pleine résolution (OOM S20)
+    const preferResizeFirst = constrained || (file.size || 0) > 900_000;
 
-    // Blob mémoire → ObjectURL en premier (le plus fiable après materialize)
-    const objectUrl = URL.createObjectURL(file);
-    try {
-        const img = await loadImageFromUrl(objectUrl);
-        if (img.decode) {
-            try { await img.decode(); } catch (_) { /* ok */ }
-        }
-        const width = img.naturalWidth || img.width;
-        const height = img.naturalHeight || img.height;
-        if (width && height) {
-            return {
-                drawable: img,
-                width,
-                height,
-                release: () => URL.revokeObjectURL(objectUrl),
-            };
-        }
-        throw new Error('Image sans dimensions');
-    } catch (e) {
-        URL.revokeObjectURL(objectUrl);
-        errors.push(e);
-    }
-
-    if (typeof createImageBitmap === 'function') {
+    const tryBitmap = async () => {
+        if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap indisponible');
         const attempts = [
-            { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
             { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'medium' },
+            { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
+            { resizeHeight: maxSide, resizeQuality: 'low' },
             { resizeWidth: maxSide, resizeQuality: 'low' },
             { imageOrientation: 'from-image' },
             {},
         ];
+        let lastErr = null;
         for (const opts of attempts) {
             try {
                 const bmp = await createImageBitmap(file, opts);
@@ -425,8 +443,42 @@ async function decodePhotoDrawable(file) {
                     };
                 }
             } catch (e) {
-                errors.push(e);
+                lastErr = e;
             }
+        }
+        throw lastErr || new Error('createImageBitmap échoué');
+    };
+
+    const tryImage = async () => {
+        const objectUrl = URL.createObjectURL(file);
+        try {
+            const img = await loadImageFromUrl(objectUrl);
+            if (img.decode) {
+                try { await img.decode(); } catch (_) { /* ok */ }
+            }
+            const width = img.naturalWidth || img.width;
+            const height = img.naturalHeight || img.height;
+            if (width && height) {
+                return {
+                    drawable: img,
+                    width,
+                    height,
+                    release: () => URL.revokeObjectURL(objectUrl),
+                };
+            }
+            throw new Error('Image sans dimensions');
+        } catch (e) {
+            URL.revokeObjectURL(objectUrl);
+            throw e;
+        }
+    };
+
+    const order = preferResizeFirst ? [tryBitmap, tryImage] : [tryImage, tryBitmap];
+    for (const fn of order) {
+        try {
+            return await fn();
+        } catch (e) {
+            errors.push(e);
         }
     }
 
@@ -473,7 +525,7 @@ async function compressImage(file, maxSize = 1024, quality = 0.78) {
     }
 }
 
-/** Clone mémoire → HEIC→JPEG → JPEG léger (< ~900 Ko) pour l’upload mobile. */
+/** Clone mémoire → HEIC→JPEG → JPEG léger pour l’upload mobile (S20 plus agressif). */
 async function preparePhotoForUpload(file) {
     if (!file) throw new Error('Aucune photo');
 
@@ -486,15 +538,14 @@ async function preparePhotoForUpload(file) {
         return file;
     }
 
+    const constrained = isConstrainedPhotoDevice();
     const local = await materializePhoto(file);
     const normalized = await convertHeicToJpeg(local);
 
-    const passes = [
-        [960, 0.72],
-        [720, 0.58],
-        [640, 0.5],
-        [512, 0.42],
-    ];
+    const passes = constrained
+        ? [[720, 0.55], [640, 0.48], [512, 0.4], [420, 0.35]]
+        : [[960, 0.72], [720, 0.58], [640, 0.5], [512, 0.42]];
+    const targetBytes = constrained ? 700_000 : 900_000;
     let lastErr = null;
     let best = null;
 
@@ -503,13 +554,15 @@ async function preparePhotoForUpload(file) {
             const compressed = await compressImage(normalized, size, q);
             if (!compressed?.size) continue;
             best = compressed;
-            if (compressed.size <= 900_000) return compressed;
+            if (compressed.size <= targetBytes) return compressed;
+            await sleep(0);
         } catch (e) {
             lastErr = e;
+            await sleep(0);
         }
     }
 
-    if (best?.size && best.size <= 1_400_000) return best;
+    if (best?.size && best.size <= (constrained ? 1_100_000 : 1_400_000)) return best;
     if (lastErr) throw lastErr;
     throw new Error('Compression impossible');
 }
@@ -1203,6 +1256,7 @@ async function initialiserApp() {
     bindMapControlButtons();
     bindArbreAutosave();
     bindPhotoPickers();
+    preloadHeicConverter();
     setOfflineBanner(!isOnline());
     onConnectivityChange(async (online) => {
         setOfflineBanner(!online);
