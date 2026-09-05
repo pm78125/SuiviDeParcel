@@ -1,4 +1,4 @@
-import { supabase, BUCKET_NAME, FILE_NAME } from './lib/supabase.js';
+import { supabase, supabaseUrl, supabaseKey, BUCKET_NAME, FILE_NAME } from './lib/supabase.js';
 import { onConnectivityChange, cacheSnapshot, loadSnapshot, isOnline } from './lib/offline.js';
 import { showToast, confirmAction } from './lib/utils.js';
 
@@ -473,31 +473,82 @@ async function compressImage(file, maxSize = 1024, quality = 0.78) {
     }
 }
 
-/** Clone mémoire → HEIC→JPEG → compression ; sinon envoi du blob mémoire. */
+/** Clone mémoire → HEIC→JPEG → JPEG léger (< ~900 Ko) pour l’upload mobile. */
 async function preparePhotoForUpload(file) {
     if (!file) throw new Error('Aucune photo');
+
+    // Déjà un petit JPEG préparé → ne pas retraiter
+    if (
+        file.size > 0
+        && file.size <= 900_000
+        && (file.type === 'image/jpeg' || file.type === 'image/jpg')
+    ) {
+        return file;
+    }
 
     const local = await materializePhoto(file);
     const normalized = await convertHeicToJpeg(local);
 
-    try {
-        let compressed = await compressImage(normalized, 1024, 0.78);
-        if (compressed.size > 1_800_000) {
-            compressed = await compressImage(normalized, 720, 0.55);
+    const passes = [
+        [960, 0.72],
+        [720, 0.58],
+        [640, 0.5],
+        [512, 0.42],
+    ];
+    let lastErr = null;
+    let best = null;
+
+    for (const [size, q] of passes) {
+        try {
+            const compressed = await compressImage(normalized, size, q);
+            if (!compressed?.size) continue;
+            best = compressed;
+            if (compressed.size <= 900_000) return compressed;
+        } catch (e) {
+            lastErr = e;
         }
-        if (!compressed?.size) throw new Error('Compression impossible');
-        return compressed;
-    } catch (err) {
-        const size = normalized.size || 0;
-        if (size > 0 && size <= 6_000_000) {
-            console.warn('compression échouée, envoi du blob mémoire', err);
-            const type = (normalized.type && normalized.type.startsWith('image/') && !/heic|heif/i.test(normalized.type))
-                ? normalized.type
-                : 'image/jpeg';
-            return new Blob([normalized], { type });
-        }
-        throw err;
     }
+
+    if (best?.size && best.size <= 1_400_000) return best;
+    if (lastErr) throw lastErr;
+    throw new Error('Compression impossible');
+}
+
+function isTransientUploadError(err) {
+    const m = String(err?.message || err?.error || err || '');
+    return /failed to fetch|networkerror|network error|load failed|timeout|timed out|503|502|504|429|abort/i.test(m);
+}
+
+/** Repli XHR si fetch() tombe en « Failed to fetch » sur Chrome Android. */
+function uploadPhotoViaXhr(fileName, payload, contentType) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        const url = `${supabaseUrl}/storage/v1/object/photos/${encodeURIComponent(fileName)}`;
+        xhr.open('POST', url);
+        xhr.setRequestHeader('Authorization', `Bearer ${supabaseKey}`);
+        xhr.setRequestHeader('apikey', supabaseKey);
+        xhr.setRequestHeader('Content-Type', contentType || 'image/jpeg');
+        xhr.setRequestHeader('x-upsert', 'false');
+        xhr.setRequestHeader('cache-control', '3600');
+        xhr.timeout = 90000;
+        xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+                resolve();
+                return;
+            }
+            let msg = `HTTP ${xhr.status}`;
+            try {
+                const j = JSON.parse(xhr.responseText);
+                msg = j.message || j.error || msg;
+            } catch (_) {
+                if (xhr.responseText) msg = xhr.responseText.slice(0, 160);
+            }
+            reject(new Error(msg));
+        };
+        xhr.onerror = () => reject(new Error('Failed to fetch'));
+        xhr.ontimeout = () => reject(new Error('timeout'));
+        xhr.send(payload);
+    });
 }
 
 async function uploadPhoto(file, prefix) {
@@ -505,32 +556,48 @@ async function uploadPhoto(file, prefix) {
     const readyJpeg = !!(
         file
         && file.size > 0
-        && file.size <= 1_800_000
+        && file.size <= 900_000
         && (file.type === 'image/jpeg' || file.type === 'image/jpg')
     );
     if (!readyJpeg) {
         payload = await preparePhotoForUpload(file);
     }
-
-    const contentType = (payload.type && payload.type.startsWith('image/') && !/heic|heif/i.test(payload.type))
-        ? payload.type
-        : 'image/jpeg';
-    const ext = contentType.includes('png') ? 'png'
-        : contentType.includes('webp') ? 'webp'
-        : 'jpg';
-    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
-    try {
-        const { error } = await supabase.storage.from('photos').upload(fileName, payload, {
-            cacheControl: '3600',
-            contentType,
-            upsert: false,
-        });
-        if (error) throw error;
-    } catch (e) {
-        console.error('uploadPhoto', e);
-        throw new Error(friendlyPhotoError(e));
+    // Sécurité : jamais envoyer un monstre sur 4G
+    if (payload.size > 1_400_000) {
+        payload = await compressImage(payload, 512, 0.4);
     }
-    return supabase.storage.from('photos').getPublicUrl(fileName).data.publicUrl;
+
+    const contentType = 'image/jpeg';
+    let lastErr = null;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        const fileName = `${prefix}_${Date.now()}_${attempt}_${Math.floor(Math.random() * 1000)}.jpg`;
+        try {
+            if (attempt > 1 && typeof setArbreSaveStatus === 'function') {
+                setArbreSaveStatus(`Nouvel essai d’envoi (${attempt}/3)…`, 'is-saving');
+            }
+            try {
+                const { error } = await supabase.storage.from('photos').upload(fileName, payload, {
+                    cacheControl: '3600',
+                    contentType,
+                    upsert: false,
+                });
+                if (error) throw error;
+            } catch (fetchErr) {
+                // Même tentative : repli XHR (souvent plus stable sur Samsung)
+                if (!isTransientUploadError(fetchErr)) throw fetchErr;
+                await uploadPhotoViaXhr(fileName, payload, contentType);
+            }
+            return supabase.storage.from('photos').getPublicUrl(fileName).data.publicUrl;
+        } catch (e) {
+            console.error('uploadPhoto attempt', attempt, e);
+            lastErr = e;
+            if (!isTransientUploadError(e) || attempt === 3) break;
+            await sleep(500 * attempt);
+        }
+    }
+
+    throw new Error(friendlyPhotoError(lastErr));
 }
 
 // --- ZOOM / ROTATION ---
@@ -2535,12 +2602,12 @@ async function persisterArbre({ silent = false, source = 'manual' } = {}) {
         console.error(err);
         const msg = friendlyPhotoError(err);
         showToast(msg, 'danger');
-        if (silent) setArbreSaveStatus('Échec — réessayez', 'is-error');
+        if (silent) setArbreSaveStatus('Échec envoi — retapez + ou modifiez un champ', 'is-error');
         if (btnSubmit) {
             btnSubmit.textContent = originalText;
             btnSubmit.disabled = false;
         }
-        // Échec upload photo : pas de retry auto (évite boucle Failed to fetch)
+        // Garder pendingArbrePhotoFile pour un nouvel essai (autosave / + )
         if (source === 'photo') arbreSaveQueued = false;
         return false;
     } finally {

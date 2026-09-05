@@ -1,5 +1,5 @@
 /* TreeTracker service worker — shell cache + offline fallback */
-const CACHE = 'treetracker-shell-v47';
+const CACHE = 'treetracker-shell-v48';
 const SHELL = [
   '/',
   '/index.html',
