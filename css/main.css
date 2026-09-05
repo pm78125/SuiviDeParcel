@@ -1210,6 +1210,18 @@ table.inventory td.col-photo {
   padding: 1rem;
 }
 .modal-overlay--center.hidden { display: none !important; }
+/* Au-dessus de la fiche arbre (55) ; sur mobile la fiche passe à 175 */
+#suivi-modal,
+#modal-categorie,
+#modal-provenance,
+#modal-gestion-categories {
+  z-index: 60;
+}
+#suivi-modal .modal-card {
+  max-height: min(90vh, 40rem);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
 .modal-center {
   position: fixed;
   inset: 0;
@@ -2294,9 +2306,20 @@ table.inventory td.col-photo {
   .modal-overlay,
   #arbre-modal-overlay { z-index: 170; }
   .modal-center { z-index: 175; }
+  #suivi-modal,
+  #modal-categorie,
+  #modal-provenance,
+  #modal-gestion-categories {
+    z-index: 185 !important;
+  }
   #confirm-modal { z-index: 210 !important; }
   #modal-gps-cal { z-index: 178 !important; }
   #lightbox { z-index: 220; }
+
+  #suivi-modal .modal-card {
+    max-height: calc(100dvh - var(--tabbar-h) - var(--safe-bottom) - 0.5rem);
+    overflow-y: auto;
+  }
 
   .toast-host {
     right: 0.75rem;
