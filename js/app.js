@@ -192,22 +192,17 @@ function parseTailleToCm(val) {
     return null;
 }
 
-/** Pipeline photo Samsung S20 — évite arrayBuffer (souvent bloqué par la galerie). */
+/** Pipeline photo Samsung S20 — ObjectURL + canvas, jamais d’envoi brut multi‑Mo. */
 
-/** Clone synchrone du File (slice) : garde un Blob utilisable hors du sélecteur. */
-function clonePhotoBlob(file) {
-    if (!file) return null;
-    try {
-        const type = (file.type && file.type !== 'application/octet-stream')
-            ? file.type
-            : 'image/jpeg';
-        if (file.size > 0) return file.slice(0, file.size, type);
-        // size inconnu : slice() sans borne copie tout le contenu accessible
-        return file.slice();
-    } catch (e) {
-        console.warn('slice photo', e);
+function friendlyPhotoError(err) {
+    const m = String(err?.message || err || '');
+    if (/failed to fetch|networkerror|network error|load failed|erreur de réseau/i.test(m)) {
+        return 'Envoi interrompu — réessayez (vérifiez la connexion)';
     }
-    return file;
+    if (/décodage|dimensions|compression|image/i.test(m)) {
+        return 'Photo illisible — choisissez un autre cliché JPEG';
+    }
+    return m || 'Impossible d’envoyer la photo';
 }
 
 function loadImageFromUrl(url) {
@@ -220,62 +215,59 @@ function loadImageFromUrl(url) {
 }
 
 async function canvasToJpegBlob(canvas, quality) {
-    let out = await new Promise((resolve) => {
-        if (canvas.toBlob) canvas.toBlob(resolve, 'image/jpeg', quality);
-        else resolve(null);
+    const blob = await new Promise((resolve) => {
+        if (!canvas.toBlob) {
+            resolve(null);
+            return;
+        }
+        canvas.toBlob(resolve, 'image/jpeg', quality);
     });
-    if (out && out.size) return out;
+    if (blob && blob.size) return blob;
+
+    // Fallback sans fetch() (évite "Failed to fetch" sur certains WebViews)
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
-    const bin = atob(dataUrl.split(',')[1] || '');
+    const parts = dataUrl.split(',');
+    const bin = atob(parts[1] || '');
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    out = new Blob([bytes], { type: 'image/jpeg' });
+    const out = new Blob([bytes], { type: 'image/jpeg' });
     if (!out.size) throw new Error('Export JPEG vide');
     return out;
 }
 
-/**
- * Compresse via URL objet + Image/canvas — sans lire le File en ArrayBuffer
- * (méthode qui échoue sur la galerie Samsung S20).
- */
-async function compressImage(file, maxSize = 1200, quality = 0.8) {
+async function compressImage(file, maxSize = 1024, quality = 0.78) {
     if (!file) throw new Error('Aucune photo');
 
     const url = URL.createObjectURL(file);
     try {
-        let img;
+        let drawable = null;
+        let srcW = 0;
+        let srcH = 0;
+
         try {
-            img = await loadImageFromUrl(url);
+            const img = await loadImageFromUrl(url);
             if (img.decode) {
                 try { await img.decode(); } catch (_) { /* ok */ }
             }
-        } catch (e1) {
-            // createImageBitmap direct sur le Blob
+            drawable = img;
+            srcW = img.naturalWidth || img.width;
+            srcH = img.naturalHeight || img.height;
+        } catch (imgErr) {
             try {
-                const bmp = await createImageBitmap(file, {
-                    imageOrientation: 'from-image',
-                    resizeWidth: maxSize,
-                    resizeQuality: 'low',
-                });
-                const canvas = document.createElement('canvas');
-                const scale = Math.min(1, maxSize / Math.max(bmp.width, bmp.height));
-                canvas.width = Math.max(1, Math.round(bmp.width * scale));
-                canvas.height = Math.max(1, Math.round(bmp.height * scale));
-                canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
-                bmp.close?.();
-                return await canvasToJpegBlob(canvas, quality);
-            } catch (e2) {
-                console.warn('compress bitmap', e2);
-                throw e1;
+                const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+                drawable = bmp;
+                srcW = bmp.width;
+                srcH = bmp.height;
+            } catch (bmpErr) {
+                console.warn('decode photo', imgErr, bmpErr);
+                throw new Error('Décodage image impossible');
             }
         }
 
-        const srcW = img.naturalWidth || img.width;
-        const srcH = img.naturalHeight || img.height;
         if (!srcW || !srcH) throw new Error('Image sans dimensions');
 
-        const trySizes = [...new Set([maxSize, 960, 720, 512])];
-        const qualities = [quality, 0.7, 0.55];
+        const trySizes = [...new Set([maxSize, 900, 720, 512])];
+        const qualities = [quality, 0.65, 0.5];
         let lastErr = null;
 
         for (const size of trySizes) {
@@ -288,70 +280,56 @@ async function compressImage(file, maxSize = 1200, quality = 0.8) {
                     canvas.width = width;
                     canvas.height = height;
                     const ctx = canvas.getContext('2d', { alpha: false });
-                    ctx.fillStyle = '#fff';
+                    if (!ctx) throw new Error('canvas indisponible');
+                    ctx.fillStyle = '#ffffff';
                     ctx.fillRect(0, 0, width, height);
-                    ctx.drawImage(img, 0, 0, width, height);
-                    const blob = await canvasToJpegBlob(canvas, q);
-                    if (blob?.size) return blob;
+                    ctx.drawImage(drawable, 0, 0, width, height);
+                    const out = await canvasToJpegBlob(canvas, q);
+                    if (out?.size) {
+                        drawable.close?.();
+                        return out;
+                    }
                 } catch (e) {
                     lastErr = e;
-                    console.warn('compress canvas', size, q, e);
                 }
             }
         }
+        drawable.close?.();
         throw lastErr || new Error('Compression impossible');
     } finally {
         URL.revokeObjectURL(url);
     }
 }
 
-/**
- * Prépare un Blob prêt à uploader. Ne matérialise PAS via arrayBuffer.
- * Sur S20 on garde le Blob issu de slice + compression ObjectURL.
- */
+/** Toujours renvoyer un JPEG compressé (< ~1,5 Mo) — pas de fallback fichier brut. */
 async function preparePhotoForUpload(file) {
     if (!file) throw new Error('Aucune photo');
-
-    const local = clonePhotoBlob(file);
-    // Vérifie qu’on peut au moins créer une URL / prévisualiser
-    const testUrl = URL.createObjectURL(local);
-    URL.revokeObjectURL(testUrl);
-
-    try {
-        const compressed = await compressImage(local);
-        if (compressed?.size) return compressed;
-    } catch (e) {
-        console.warn('Compression échouée, envoi du fichier tel quel', e);
+    let compressed = await compressImage(file, 1024, 0.78);
+    if (compressed.size > 1_800_000) {
+        compressed = await compressImage(file, 720, 0.55);
     }
-
-    // Dernier recours : envoyer le Blob/File d’origine à Storage
-    if (local.size > 0) {
-        return local;
-    }
-    throw new Error('Impossible d’utiliser cette photo — réessayez');
+    if (!compressed?.size) throw new Error('Compression impossible');
+    return compressed;
 }
 
 async function uploadPhoto(file, prefix) {
-    // Déjà un JPEG préparé (depuis preview) → envoi direct
     let payload = file;
-    const alreadyJpeg = file?.type === 'image/jpeg' && file.size > 0 && file.size < 3_500_000
-        && !(file instanceof File && file.name === 'photo-upload.bin');
-    if (!alreadyJpeg) {
+    const readyJpeg = file?.type === 'image/jpeg' && file.size > 0 && file.size <= 1_800_000;
+    if (!readyJpeg) {
         payload = await preparePhotoForUpload(file);
     }
-    const type = (payload.type && payload.type.startsWith('image/'))
-        ? payload.type
-        : 'image/jpeg';
-    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
-    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
-    const { error } = await supabase.storage.from('photos').upload(fileName, payload, {
-        cacheControl: '3600',
-        contentType: type.startsWith('image/') ? type : 'image/jpeg',
-        upsert: false,
-    });
-    if (error) {
-        console.error('Supabase storage upload', error);
-        throw new Error(error.message || 'Échec envoi photo');
+
+    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+    try {
+        const { error } = await supabase.storage.from('photos').upload(fileName, payload, {
+            cacheControl: '3600',
+            contentType: 'image/jpeg',
+            upsert: false,
+        });
+        if (error) throw error;
+    } catch (e) {
+        console.error('uploadPhoto', e);
+        throw new Error(friendlyPhotoError(e));
     }
     return supabase.storage.from('photos').getPublicUrl(fileName).data.publicUrl;
 }
@@ -2118,34 +2096,33 @@ function bindPhotoPickers() {
 }
 
 window.previewMainPhoto = async function(event) {
-    const raw = event.target.files?.[0];
+    const input = event.target;
+    const raw = input.files?.[0];
     if (!raw) return;
 
-    // Clone synchrone immédiat (avant tout await) — critique sur galerie Samsung
-    const local = clonePhotoBlob(raw);
-    pendingArbrePhotoFile = local;
+    // Garder la ref File tout de suite (pas de slice — illisible sur certaines galeries S20)
+    pendingArbrePhotoFile = raw;
+    // Permet de resélectionner le même fichier après un échec
+    try { input.value = ''; } catch (_) { /* ok */ }
 
     try {
         setArbreSaveStatus('Préparation de la photo…', 'is-saving');
-        const src = URL.createObjectURL(local);
+        const src = URL.createObjectURL(raw);
         const preview = document.getElementById('form-photo-preview');
         preview.src = src;
         preview.classList.remove('hidden');
         document.getElementById('form-photo-placeholder').classList.add('hidden');
         document.getElementById('form-photo-box')?.classList.add('has-photo');
 
-        // Prépare le JPEG tout de suite pendant que le Blob est encore valide
-        try {
-            pendingArbrePhotoFile = await preparePhotoForUpload(local);
-        } catch (prepErr) {
-            console.warn('preparePhotoForUpload', prepErr);
-            // garde le clone local : uploadPhoto retentera
-            pendingArbrePhotoFile = local;
-        }
+        // Compresser tout de suite → petit JPEG en mémoire (pas d’envoi brut multi‑Mo)
+        pendingArbrePhotoFile = await preparePhotoForUpload(raw);
 
         if (document.getElementById('form-id')?.value) {
             setArbreSaveStatus('Envoi de la photo…', 'is-saving');
-            await persisterArbre({ silent: true, source: 'photo' });
+            const ok = await persisterArbre({ silent: true, source: 'photo' });
+            if (!ok && pendingArbrePhotoFile) {
+                setArbreSaveStatus('Échec — retapez + pour réessayer', 'is-error');
+            }
         } else {
             setArbreSaveStatus('');
             showToast('Photo prête — enregistrez l’arbre');
@@ -2154,7 +2131,7 @@ window.previewMainPhoto = async function(event) {
         console.error(err);
         pendingArbrePhotoFile = null;
         setArbreSaveStatus('Échec photo', 'is-error');
-        showToast(err?.message || 'Impossible d’utiliser cette photo', 'danger');
+        showToast(friendlyPhotoError(err), 'danger');
     }
 };
 
@@ -2169,13 +2146,8 @@ window.previewSuiviPhoto = async function(event) {
         return;
     }
     try {
-        const local = clonePhotoBlob(raw);
         if (nameEl) nameEl.textContent = 'Préparation…';
-        try {
-            pendingSuiviPhotoFile = await preparePhotoForUpload(local);
-        } catch (_) {
-            pendingSuiviPhotoFile = local;
-        }
+        pendingSuiviPhotoFile = await preparePhotoForUpload(raw);
         if (nameEl) nameEl.textContent = raw.name || 'Photo sélectionnée';
         tile?.classList.add('has-file');
     } catch (err) {
@@ -2183,16 +2155,29 @@ window.previewSuiviPhoto = async function(event) {
         pendingSuiviPhotoFile = null;
         if (nameEl) nameEl.textContent = 'Ajouter une photo';
         tile?.classList.remove('has-file');
-        showToast(err?.message || 'Impossible d’utiliser cette photo', 'danger');
+        showToast(friendlyPhotoError(err), 'danger');
     }
 };
 
 async function persisterArbre({ silent = false, source = 'manual' } = {}) {
     if (!assertOnline('enregistrement')) return false;
 
+    // Photo / manuel : attendre la fin d’un autre save (évite faux « échec » + UI bloquée)
     if (arbreSaveInFlight) {
-        arbreSaveQueued = true;
-        return false;
+        if (source === 'photo' || source === 'manual') {
+            const t0 = Date.now();
+            while (arbreSaveInFlight && Date.now() - t0 < 20000) {
+                await new Promise((r) => setTimeout(r, 100));
+            }
+            if (arbreSaveInFlight) {
+                arbreSaveQueued = true;
+                if (silent) setArbreSaveStatus('En attente…', 'is-saving');
+                return false;
+            }
+        } else {
+            arbreSaveQueued = true;
+            return false;
+        }
     }
     arbreSaveInFlight = true;
 
@@ -2303,13 +2288,15 @@ async function persisterArbre({ silent = false, source = 'manual' } = {}) {
         return true;
     } catch (err) {
         console.error(err);
-        const msg = err?.message || err?.error_description || 'Erreur de sauvegarde';
+        const msg = friendlyPhotoError(err);
         showToast(msg, 'danger');
         if (silent) setArbreSaveStatus('Échec — réessayez', 'is-error');
         if (btnSubmit) {
             btnSubmit.textContent = originalText;
             btnSubmit.disabled = false;
         }
+        // Échec upload photo : pas de retry auto (évite boucle Failed to fetch)
+        if (source === 'photo') arbreSaveQueued = false;
         return false;
     } finally {
         arbreSaveInFlight = false;
