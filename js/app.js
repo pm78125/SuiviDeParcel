@@ -385,8 +385,8 @@ async function convertHeicToJpeg(blob) {
     }
 
     const heic2any = await ensureHeicConverter();
-    // S20 : qualités plus basses d’abord (évite OOM sur HEIC 4–5 Mo / 1816×4032)
-    const qualities = isConstrainedPhotoDevice() ? [0.5, 0.4, 0.32] : [0.7, 0.55, 0.4];
+    // Qualité d’abord ; descentes seulement si OOM S20
+    const qualities = [0.82, 0.7, 0.55, 0.4];
     let lastErr = null;
 
     for (const quality of qualities) {
@@ -404,7 +404,7 @@ async function convertHeicToJpeg(blob) {
         } catch (e) {
             lastErr = e;
             console.warn('heic2any q=' + quality, e);
-            await sleep(50);
+            await sleep(80);
         }
     }
 
@@ -412,23 +412,23 @@ async function convertHeicToJpeg(blob) {
     throw new Error('HEIC — passez la caméra en JPEG (Réglages → Formats d’image)');
 }
 
-async function decodePhotoDrawable(file) {
+async function decodePhotoDrawable(file, decodeMaxSide = 1600) {
     if (!file) throw new Error('Aucune photo');
-    const constrained = isConstrainedPhotoDevice();
-    const maxSide = constrained ? 960 : 1280;
+    const maxSide = decodeMaxSide;
     const errors = [];
-    // Gros JPEG post-HEIC (ex. 1816×4032) : éviter pleine résolution (OOM S20)
-    const preferResizeFirst = constrained || (file.size || 0) > 900_000;
+    // Gros HEIC/JPEG (ex. 1816×4032) : décoder déjà réduit (bonne qualité, pas d’OOM)
+    const preferResizeFirst = isConstrainedPhotoDevice() || (file.size || 0) > 700_000;
 
     const tryBitmap = async () => {
         if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap indisponible');
         const attempts = [
+            { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'high' },
+            { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'high' },
             { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'medium' },
             { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
             { resizeHeight: maxSide, resizeQuality: 'low' },
             { resizeWidth: maxSide, resizeQuality: 'low' },
             { imageOrientation: 'from-image' },
-            {},
         ];
         let lastErr = null;
         for (const opts of attempts) {
@@ -486,37 +486,36 @@ async function decodePhotoDrawable(file) {
     throw new Error('Décodage image impossible');
 }
 
-async function compressImage(file, maxSize = 1024, quality = 0.78) {
+async function compressImage(file, maxSize = 1600, quality = 0.84) {
     if (!file) throw new Error('Aucune photo');
 
-    const decoded = await decodePhotoDrawable(file);
+    const decoded = await decodePhotoDrawable(file, Math.max(maxSize, 1400));
     try {
         const { drawable, width: srcW, height: srcH } = decoded;
         if (!srcW || !srcH) throw new Error('Image sans dimensions');
 
-        const trySizes = [...new Set([maxSize, 900, 720, 512])];
-        const qualities = [quality, 0.65, 0.5];
+        const scale = Math.min(1, maxSize / Math.max(srcW, srcH));
+        const width = Math.max(1, Math.round(srcW * scale));
+        const height = Math.max(1, Math.round(srcH * scale));
+        const qualities = [quality, Math.max(0.55, quality - 0.1), Math.max(0.45, quality - 0.2)];
         let lastErr = null;
 
-        for (const size of trySizes) {
-            for (const q of qualities) {
-                try {
-                    const scale = Math.min(1, size / Math.max(srcW, srcH));
-                    const width = Math.max(1, Math.round(srcW * scale));
-                    const height = Math.max(1, Math.round(srcH * scale));
-                    const canvas = document.createElement('canvas');
-                    canvas.width = width;
-                    canvas.height = height;
-                    const ctx = canvas.getContext('2d', { alpha: false });
-                    if (!ctx) throw new Error('canvas indisponible');
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(0, 0, width, height);
-                    ctx.drawImage(drawable, 0, 0, width, height);
-                    const out = await canvasToJpegBlob(canvas, q);
-                    if (out?.size) return out;
-                } catch (e) {
-                    lastErr = e;
-                }
+        for (const q of qualities) {
+            try {
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d', { alpha: false });
+                if (!ctx) throw new Error('canvas indisponible');
+                ctx.imageSmoothingEnabled = true;
+                ctx.imageSmoothingQuality = 'high';
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, width, height);
+                ctx.drawImage(drawable, 0, 0, width, height);
+                const out = await canvasToJpegBlob(canvas, q);
+                if (out?.size) return out;
+            } catch (e) {
+                lastErr = e;
             }
         }
         throw lastErr || new Error('Compression impossible');
@@ -525,46 +524,39 @@ async function compressImage(file, maxSize = 1024, quality = 0.78) {
     }
 }
 
-/** Clone mémoire → HEIC→JPEG → JPEG léger pour l’upload mobile (S20 plus agressif). */
-async function preparePhotoForUpload(file) {
+/**
+ * Qualité normale (~1600 px). `urgent` = recompression seulement après échec réseau.
+ */
+async function preparePhotoForUpload(file, { urgent = false } = {}) {
     if (!file) throw new Error('Aucune photo');
 
-    // Déjà un petit JPEG préparé → ne pas retraiter
     if (
-        file.size > 0
-        && file.size <= 900_000
+        !urgent
+        && file.size > 0
+        && file.size <= 1_800_000
         && (file.type === 'image/jpeg' || file.type === 'image/jpg')
     ) {
         return file;
     }
 
-    const constrained = isConstrainedPhotoDevice();
+    // Recompression d’un JPEG déjà en mémoire (après échec upload)
+    if (urgent && (file.type === 'image/jpeg' || file.type === 'image/jpg') && file.size > 0) {
+        return compressImage(file, 1000, 0.68);
+    }
+
     const local = await materializePhoto(file);
     const normalized = await convertHeicToJpeg(local);
 
-    const passes = constrained
-        ? [[720, 0.55], [640, 0.48], [512, 0.4], [420, 0.35]]
-        : [[960, 0.72], [720, 0.58], [640, 0.5], [512, 0.42]];
-    const targetBytes = constrained ? 700_000 : 900_000;
-    let lastErr = null;
-    let best = null;
-
-    for (const [size, q] of passes) {
-        try {
-            const compressed = await compressImage(normalized, size, q);
-            if (!compressed?.size) continue;
-            best = compressed;
-            if (compressed.size <= targetBytes) return compressed;
-            await sleep(0);
-        } catch (e) {
-            lastErr = e;
-            await sleep(0);
-        }
+    // Bonne qualité d’abord (identique S20 / S26 / iPhone)
+    let compressed = await compressImage(normalized, 1600, 0.84);
+    if (compressed.size > 1_900_000) {
+        compressed = await compressImage(normalized, 1400, 0.78);
     }
-
-    if (best?.size && best.size <= (constrained ? 1_100_000 : 1_400_000)) return best;
-    if (lastErr) throw lastErr;
-    throw new Error('Compression impossible');
+    if (compressed.size > 1_900_000) {
+        compressed = await compressImage(normalized, 1200, 0.72);
+    }
+    if (!compressed?.size) throw new Error('Compression impossible');
+    return compressed;
 }
 
 function isTransientUploadError(err) {
@@ -604,22 +596,7 @@ function uploadPhotoViaXhr(fileName, payload, contentType) {
     });
 }
 
-async function uploadPhoto(file, prefix) {
-    let payload = file;
-    const readyJpeg = !!(
-        file
-        && file.size > 0
-        && file.size <= 900_000
-        && (file.type === 'image/jpeg' || file.type === 'image/jpg')
-    );
-    if (!readyJpeg) {
-        payload = await preparePhotoForUpload(file);
-    }
-    // Sécurité : jamais envoyer un monstre sur 4G
-    if (payload.size > 1_400_000) {
-        payload = await compressImage(payload, 512, 0.4);
-    }
-
+async function uploadPhotoPayload(payload, prefix) {
     const contentType = 'image/jpeg';
     let lastErr = null;
 
@@ -637,7 +614,6 @@ async function uploadPhoto(file, prefix) {
                 });
                 if (error) throw error;
             } catch (fetchErr) {
-                // Même tentative : repli XHR (souvent plus stable sur Samsung)
                 if (!isTransientUploadError(fetchErr)) throw fetchErr;
                 await uploadPhotoViaXhr(fileName, payload, contentType);
             }
@@ -649,8 +625,40 @@ async function uploadPhoto(file, prefix) {
             await sleep(500 * attempt);
         }
     }
+    throw lastErr || new Error('Envoi impossible');
+}
 
-    throw new Error(friendlyPhotoError(lastErr));
+async function uploadPhoto(file, prefix) {
+    let payload = file;
+    const readyJpeg = !!(
+        file
+        && file.size > 0
+        && file.size <= 1_800_000
+        && (file.type === 'image/jpeg' || file.type === 'image/jpg')
+    );
+    if (!readyJpeg) {
+        payload = await preparePhotoForUpload(file);
+    }
+    // Plafond doux — sans écraser en 512px
+    if (payload.size > 2_200_000) {
+        payload = await compressImage(payload, 1400, 0.76);
+    }
+
+    try {
+        return await uploadPhotoPayload(payload, prefix);
+    } catch (e) {
+        if (!isTransientUploadError(e)) throw new Error(friendlyPhotoError(e));
+        // Seulement si le réseau échoue : qualité réduite, pas par défaut
+        if (typeof setArbreSaveStatus === 'function') {
+            setArbreSaveStatus('Réseau fragile — nouvel essai…', 'is-saving');
+        }
+        try {
+            const smaller = await preparePhotoForUpload(payload, { urgent: true });
+            return await uploadPhotoPayload(smaller, prefix);
+        } catch (e2) {
+            throw new Error(friendlyPhotoError(e2));
+        }
+    }
 }
 
 // --- ZOOM / ROTATION ---
