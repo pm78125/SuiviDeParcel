@@ -225,8 +225,12 @@ async function uploadPhoto(file, prefix) {
 }
 
 // --- ZOOM / ROTATION ---
+const ZOOM_MIN = 40;
+/** Facteur par clic +/- : même sensation à 80 % ou à 2000 %. */
+const ZOOM_BTN_FACTOR = 1.25;
+
 let zoomLevel = parseInt(localStorage.getItem('mapZoom'), 10);
-if (!Number.isFinite(zoomLevel) || zoomLevel < 40 || zoomLevel > 25000) zoomLevel = 100;
+if (!Number.isFinite(zoomLevel) || zoomLevel < ZOOM_MIN || zoomLevel > 25000) zoomLevel = 100;
 let rotationDeg = parseInt(localStorage.getItem('mapRotation'), 10);
 if (!Number.isFinite(rotationDeg)) rotationDeg = 0;
 
@@ -237,22 +241,15 @@ function persistMapView() {
     } catch (_) { /* private mode / quota */ }
 }
 
-/** Zoom max : assez pour inspecter le plan au pixel près. */
+/** Zoom max : ~4× la densité native du plan (assez pour inspecter). */
 function maxZoomLevel() {
     const img = document.getElementById('map-image');
     const base = Number(window.baseMapWidth) || 800;
     if (img?.naturalWidth > 0 && base > 0) {
-        return Math.min(25000, Math.max(5000, Math.round((img.naturalWidth * 10 / base) * 100)));
+        const oneToOne = (img.naturalWidth / base) * 100;
+        return Math.min(8000, Math.max(400, Math.round(oneToOne * 4)));
     }
-    return 10000;
-}
-
-function zoomStep(deltaSign) {
-    const z = Number(zoomLevel) || 100;
-    if (z >= 2000) return deltaSign * 200;
-    if (z >= 800) return deltaSign * 100;
-    if (z >= 300) return deltaSign * 50;
-    return deltaSign * 40;
+    return 2000;
 }
 
 function applyZoom(nextLevel, { clientX = null, clientY = null, persist = true } = {}) {
@@ -261,39 +258,67 @@ function applyZoom(nextLevel, { clientX = null, clientY = null, persist = true }
     if (!wrapper) return;
 
     const maxZ = maxZoomLevel();
-    const next = Math.max(40, Math.min(maxZ, Number(nextLevel) || 100));
-    if (!Number.isFinite(next) || Math.abs(next - zoomLevel) < 0.01) return;
+    const next = Math.max(ZOOM_MIN, Math.min(maxZ, Number(nextLevel) || 100));
+    if (!Number.isFinite(next) || Math.abs(next - zoomLevel) < 0.05) {
+        updateZoomControlsUi();
+        return;
+    }
 
-    let anchor = null;
-    if (area && area.scrollWidth > 0 && area.scrollHeight > 0) {
+    let ox = 0;
+    let oy = 0;
+    let contentX = 0;
+    let contentY = 0;
+    let oldW = 1;
+    let oldH = 1;
+    if (area) {
         const rect = area.getBoundingClientRect();
-        const ox = clientX != null ? (clientX - rect.left) : area.clientWidth / 2;
-        const oy = clientY != null ? (clientY - rect.top) : area.clientHeight / 2;
-        anchor = {
-            xRatio: (area.scrollLeft + ox) / area.scrollWidth,
-            yRatio: (area.scrollTop + oy) / area.scrollHeight,
-            ox, oy,
-        };
+        ox = clientX != null ? (clientX - rect.left) : area.clientWidth / 2;
+        oy = clientY != null ? (clientY - rect.top) : area.clientHeight / 2;
+        oldW = Math.max(area.scrollWidth, 1);
+        oldH = Math.max(area.scrollHeight, 1);
+        contentX = area.scrollLeft + ox;
+        contentY = area.scrollTop + oy;
     }
 
     zoomLevel = next;
     if (persist) persistMapView();
     appliquerTransformations();
 
-    if (anchor && area) {
-        requestAnimationFrame(() => {
-            area.scrollLeft = anchor.xRatio * area.scrollWidth - anchor.ox;
-            area.scrollTop = anchor.yRatio * area.scrollHeight - anchor.oy;
-        });
+    if (area) {
+        const newW = Math.max(area.scrollWidth, 1);
+        const newH = Math.max(area.scrollHeight, 1);
+        area.scrollLeft = contentX * (newW / oldW) - ox;
+        area.scrollTop = contentY * (newH / oldH) - oy;
+    }
+}
+
+function updateZoomControlsUi() {
+    const maxZ = maxZoomLevel();
+    const z = Math.round(Number(zoomLevel) || 100);
+    const label = document.getElementById('zoom-level-label');
+    if (label) label.textContent = `${z} %`;
+
+    const btnIn = document.querySelector('#map-controls [data-map-action="zoom-in"]');
+    const btnOut = document.querySelector('#map-controls [data-map-action="zoom-out"]');
+    if (btnIn) {
+        btnIn.disabled = z >= maxZ - 0.5;
+        btnIn.title = `Zoom + (${z} %)`;
+    }
+    if (btnOut) {
+        btnOut.disabled = z <= ZOOM_MIN + 0.5;
+        btnOut.title = `Zoom − (${z} %)`;
     }
 }
 
 window.changerZoom = function(delta) {
-    const step = typeof delta === 'number' && Number.isFinite(delta) ? delta : zoomStep(1);
-    applyZoom(zoomLevel + step);
+    if (typeof delta === 'number' && Number.isFinite(delta) && Math.abs(delta) !== 1) {
+        applyZoom(zoomLevel + delta);
+        return;
+    }
+    applyZoom(delta < 0 ? zoomLevel / ZOOM_BTN_FACTOR : zoomLevel * ZOOM_BTN_FACTOR);
 };
-window.zoomIn = function() { applyZoom(zoomLevel + zoomStep(1)); };
-window.zoomOut = function() { applyZoom(zoomLevel + zoomStep(-1)); };
+window.zoomIn = function() { applyZoom(zoomLevel * ZOOM_BTN_FACTOR); };
+window.zoomOut = function() { applyZoom(zoomLevel / ZOOM_BTN_FACTOR); };
 
 window.changerRotation = function(delta) {
     rotationDeg += delta;
@@ -310,6 +335,7 @@ function appliquerTransformations() {
     wrapper.style.width = `${newWidth}px`;
     wrapper.style.maxWidth = 'none';
     wrapper.style.transform = `rotate(${rotationDeg}deg)`;
+    updateZoomControlsUi();
 }
 
 function setZoomLevel(level, { persist = true, anchorClientX = null, anchorClientY = null } = {}) {
@@ -743,6 +769,7 @@ async function configurerCarte(forceReload = false) {
         const areaRatio = areaW / areaH;
         if (imgRatio > areaRatio) window.baseMapWidth = areaW;
         else window.baseMapWidth = areaH * imgRatio;
+        zoomLevel = Math.max(ZOOM_MIN, Math.min(maxZoomLevel(), zoomLevel));
         appliquerTransformations();
         appliquerFiltres();
         majLegende();
@@ -1538,8 +1565,10 @@ async function fetchHistorique(arbreId) {
 
 window.ouvrirFormulaireSuivi = function() {
     document.getElementById('suivi-form').reset();
-    clearPhotoInputs('suivi-photo', 'suivi-photo-camera');
-    document.getElementById('suivi-photo-name')?.classList.add('hidden');
+    clearPhotoInputs('suivi-photo');
+    const nameEl = document.getElementById('suivi-photo-name');
+    if (nameEl) nameEl.textContent = 'Ajouter une photo';
+    document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
     document.getElementById('suivi-id').value = '';
     document.getElementById('suivi-arbre-id').value = arbreSelectionne.id;
     document.getElementById('suivi-date').value = new Date().toISOString().split('T')[0];
@@ -1551,8 +1580,10 @@ window.editerSuivi = function(suiviId) {
     const suivi = tousLesSuivisGlobaux.find(s => s.id === suiviId);
     if (!suivi) return;
     document.getElementById('suivi-form').reset();
-    clearPhotoInputs('suivi-photo', 'suivi-photo-camera');
-    document.getElementById('suivi-photo-name')?.classList.add('hidden');
+    clearPhotoInputs('suivi-photo');
+    const nameEl = document.getElementById('suivi-photo-name');
+    if (nameEl) nameEl.textContent = 'Ajouter une photo';
+    document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
     document.getElementById('suivi-id').value = suivi.id;
     document.getElementById('suivi-arbre-id').value = suivi.arbre_id;
     document.getElementById('suivi-date').value = suivi.date_suivi;
@@ -1574,7 +1605,7 @@ window.sauvegarderSuivi = async function(e) {
     btnSubmit.disabled = true;
 
     const id = document.getElementById('suivi-id').value;
-    const photoFile = firstSelectedFile('suivi-photo', 'suivi-photo-camera');
+    const photoFile = firstSelectedFile('suivi-photo');
     const suiviExistant = id ? tousLesSuivisGlobaux.find(s => s.id === id) : null;
     let finalImageUrl = suiviExistant ? suiviExistant.image_url : null;
 
@@ -1634,7 +1665,7 @@ window.ouvrirModalArbre = function(donnees) {
     });
 
     document.getElementById('arbre-form').reset();
-    clearPhotoInputs('form-photo', 'form-photo-camera');
+    clearPhotoInputs('form-photo');
 
     document.getElementById('panel-title').textContent = isNew ? 'Nouveau point' : "Détails de l'arbre";
     document.getElementById('form-id').value = donnees.id || '';
@@ -1651,14 +1682,17 @@ window.ouvrirModalArbre = function(donnees) {
 
     const preview = document.getElementById('form-photo-preview');
     const placeholder = document.getElementById('form-photo-placeholder');
+    const photoBox = document.getElementById('form-photo-box');
     if (donnees.image_url) {
         preview.src = donnees.image_url;
         preview.classList.remove('hidden');
         placeholder.classList.add('hidden');
+        photoBox?.classList.add('has-photo');
     } else {
         preview.classList.add('hidden');
         preview.src = '';
         placeholder.classList.remove('hidden');
+        photoBox?.classList.remove('has-photo');
     }
 
     const btnDelete = document.getElementById('btn-delete-arbre');
@@ -1701,15 +1735,6 @@ window.fermerModalArbre = function() {
     document.querySelectorAll('.tree-marker.active').forEach(m => m.classList.remove('active'));
 }
 
-function assignFileToInput(inputEl, file) {
-    if (!inputEl || !file) return;
-    try {
-        const dt = new DataTransfer();
-        dt.items.add(file);
-        inputEl.files = dt.files;
-    } catch (_) { /* certains WebViews refusent DataTransfer */ }
-}
-
 function firstSelectedFile(...ids) {
     for (const id of ids) {
         const el = document.getElementById(id);
@@ -1728,31 +1753,24 @@ function clearPhotoInputs(...ids) {
 window.previewMainPhoto = function(event) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const main = document.getElementById('form-photo');
-    const cam = document.getElementById('form-photo-camera');
-    if (event.target === cam && main) assignFileToInput(main, file);
-    if (event.target === main && cam) cam.value = '';
     const src = URL.createObjectURL(file);
     document.getElementById('form-photo-preview').src = src;
     document.getElementById('form-photo-preview').classList.remove('hidden');
     document.getElementById('form-photo-placeholder').classList.add('hidden');
+    document.getElementById('form-photo-box')?.classList.add('has-photo');
 }
 
 window.previewSuiviPhoto = function(event) {
     const file = event.target.files?.[0];
     const nameEl = document.getElementById('suivi-photo-name');
+    const tile = document.getElementById('suivi-photo-tile');
     if (!file) {
-        nameEl?.classList.add('hidden');
+        if (nameEl) nameEl.textContent = 'Ajouter une photo';
+        tile?.classList.remove('has-file');
         return;
     }
-    const main = document.getElementById('suivi-photo');
-    const cam = document.getElementById('suivi-photo-camera');
-    if (event.target === cam && main) assignFileToInput(main, file);
-    if (event.target === main && cam) cam.value = '';
-    if (nameEl) {
-        nameEl.textContent = file.name || 'Photo sélectionnée';
-        nameEl.classList.remove('hidden');
-    }
+    if (nameEl) nameEl.textContent = file.name || 'Photo sélectionnée';
+    tile?.classList.add('has-file');
 }
 
 window.sauvegarderArbre = async function(e) {
@@ -1764,7 +1782,7 @@ window.sauvegarderArbre = async function(e) {
     btnSubmit.disabled = true;
 
     const id = document.getElementById('form-id').value;
-    const photoFile = firstSelectedFile('form-photo', 'form-photo-camera');
+    const photoFile = firstSelectedFile('form-photo');
     let finalImageUrl = arbreSelectionne ? arbreSelectionne.image_url : null;
 
     const espece = document.getElementById('form-espece').value.trim();

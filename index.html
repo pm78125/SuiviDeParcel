@@ -138,6 +138,7 @@
           <button type="button" class="btn-icon" data-map-action="zoom-in" title="Zoom +" aria-label="Zoom plus">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           </button>
+          <span id="zoom-level-label" class="zoom-level-label" aria-live="polite">100 %</span>
           <button type="button" class="btn-icon" data-map-action="zoom-out" title="Zoom −" aria-label="Zoom moins">
             <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg>
           </button>
@@ -344,23 +345,15 @@
             <input type="hidden" id="form-y">
 
             <div class="photo-field">
-              <div class="photo-box">
+              <div class="photo-box" id="form-photo-box">
                 <img id="form-photo-preview" src="" alt="" class="hidden" onclick="ouvrirLightbox(this.src)">
                 <div id="form-photo-placeholder" class="photo-placeholder">
-                  <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                  Pas de photo
+                  <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                  Ajouter une photo
                 </div>
-              </div>
-              <div class="photo-actions">
-                <label class="btn btn-ghost photo-action-btn">
-                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5-8 8"/></svg>
-                  Galerie
+                <label class="photo-add-hit" for="form-photo" title="Ajouter ou changer la photo" aria-label="Ajouter ou changer la photo">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                   <input type="file" id="form-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewMainPhoto(event)">
-                </label>
-                <label class="btn btn-ghost photo-action-btn">
-                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
-                  Appareil
-                  <input type="file" id="form-photo-camera" accept="image/*" capture="environment" class="hidden" onchange="previewMainPhoto(event)">
                 </label>
               </div>
               <div style="flex:1;min-width:0">
@@ -488,19 +481,13 @@
 
         <div class="field photo-picker-block">
           <span class="photo-picker-label">Photo de l'étape</span>
-          <div class="photo-actions photo-actions--suivi">
-            <label class="btn btn-ghost photo-action-btn">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5-8 8"/></svg>
-              Galerie
-              <input type="file" id="suivi-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewSuiviPhoto(event)">
-            </label>
-            <label class="btn btn-ghost photo-action-btn">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
-              Appareil
-              <input type="file" id="suivi-photo-camera" accept="image/*" capture="environment" class="hidden" onchange="previewSuiviPhoto(event)">
-            </label>
-          </div>
-          <p id="suivi-photo-name" class="photo-file-name hidden"></p>
+          <label class="photo-pick-tile" for="suivi-photo" id="suivi-photo-tile">
+            <span class="photo-pick-tile__plus" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+            </span>
+            <span id="suivi-photo-name" class="photo-pick-tile__text">Ajouter une photo</span>
+            <input type="file" id="suivi-photo" accept="image/*,image/heic,image/heif" class="hidden" onchange="previewSuiviPhoto(event)">
+          </label>
         </div>
 
         <div class="row-2" style="margin-top:0.75rem">
