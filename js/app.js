@@ -786,6 +786,7 @@ async function initialiserApp() {
     initModalsDismiss();
     bindMapControlButtons();
     bindArbreAutosave();
+    bindPhotoPickers();
     setOfflineBanner(!isOnline());
     onConnectivityChange(async (online) => {
         setOfflineBanner(!online);
@@ -1916,6 +1917,31 @@ function bindArbreAutosave() {
     };
     form.addEventListener('input', onEdit);
     form.addEventListener('change', onEdit);
+}
+
+/** Samsung/Android : ouvrir le sélecteur via bouton → input.click() (geste utilisateur). */
+function bindPhotoPickers() {
+    if (document.body.dataset.photoPickersBound === '1') return;
+    document.body.dataset.photoPickersBound = '1';
+
+    const wire = (btnId, inputId, onFile) => {
+        const btn = document.getElementById(btnId);
+        const input = document.getElementById(inputId);
+        if (!btn || !input) return;
+
+        const openPicker = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            try { input.value = ''; } catch (_) { /* ignore */ }
+            input.click();
+        };
+        btn.addEventListener('click', openPicker);
+        // change est l’événement standard des input file (y compris Chrome Android / Samsung)
+        input.addEventListener('change', (ev) => onFile(ev));
+    };
+
+    wire('btn-pick-arbre-photo', 'form-photo', (e) => window.previewMainPhoto(e));
+    wire('suivi-photo-tile', 'suivi-photo', (e) => window.previewSuiviPhoto(e));
 }
 
 window.previewMainPhoto = function(event) {
