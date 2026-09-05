@@ -904,7 +904,7 @@ function placerNouvelArbre(e) {
 scrollArea.addEventListener('pointerdown', (e) => {
     if (e.target.closest('button') || e.target.classList.contains('tree-marker')) return;
     if (e.target.closest('#empty-map-state')) return;
-    if (e.target.closest('#map-controls') || e.target.closest('#map-legend') || e.target.closest('#add-mode-hint')) return;
+    if (e.target.closest('#map-controls') || e.target.closest('#add-mode-hint')) return;
 
     mapPointerStart = { x: e.clientX, y: e.clientY };
     hasDraggedMap = false;
@@ -1425,25 +1425,7 @@ function majSelectsCategories() {
 }
 
 function majLegende() {
-    const box = document.getElementById('map-legend');
-    const items = document.getElementById('legend-items');
-    if (!box || !items) return;
-    if (!toutesLesCategories.length || document.getElementById('map-image').classList.contains('hidden')) {
-        box.classList.add('hidden');
-        return;
-    }
-    items.innerHTML = toutesLesCategories.map(cat => `
-        <div class="legend-row">
-            <span class="legend-swatch" style="background:${escapeHtml(cat.couleur || '#1f6b4f')}"></span>
-            <span>${escapeHtml(cat.nom)}</span>
-        </div>
-    `).join('') + `
-        <div class="legend-row legend-divider">
-            <span class="legend-swatch legend-swatch--alert"></span>
-            <span>Malade</span>
-        </div>
-    `;
-    box.classList.remove('hidden');
+    // Légende retirée : elle masquait une partie du plan
 }
 
 window.fermerModalCategorie = function() {
