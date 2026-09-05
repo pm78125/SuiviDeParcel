@@ -354,10 +354,10 @@
                   <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                   Ajouter une photo
                 </div>
-                <button type="button" class="photo-add-hit" id="btn-pick-arbre-photo" title="Ajouter ou changer la photo" aria-label="Ajouter ou changer la photo">
+                <label class="photo-add-hit" id="btn-pick-arbre-photo" for="form-photo" title="Ajouter ou changer la photo" aria-label="Ajouter ou changer la photo">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-                </button>
-                <input type="file" id="form-photo" class="sr-file" accept="image/*">
+                </label>
+                <input type="file" id="form-photo" class="sr-file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif">
               </div>
               <div style="flex:1;min-width:0">
                 <div class="field">
@@ -485,13 +485,13 @@
 
         <div class="field photo-picker-block">
           <span class="photo-picker-label">Photo de l'étape</span>
-          <button type="button" class="photo-pick-tile" id="suivi-photo-tile" aria-label="Ajouter une photo">
+          <label class="photo-pick-tile" id="suivi-photo-tile" for="suivi-photo" aria-label="Ajouter une photo">
             <span class="photo-pick-tile__plus" aria-hidden="true">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
             </span>
             <span id="suivi-photo-name" class="photo-pick-tile__text">Ajouter une photo</span>
-          </button>
-          <input type="file" id="suivi-photo" class="sr-file" accept="image/*">
+          </label>
+          <input type="file" id="suivi-photo" class="sr-file" accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif">
         </div>
 
         <div class="row-2" style="margin-top:0.75rem">

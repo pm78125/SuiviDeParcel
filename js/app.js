@@ -192,15 +192,15 @@ function parseTailleToCm(val) {
     return null;
 }
 
-/** Pipeline photo Samsung S20 — ObjectURL + canvas, jamais d’envoi brut multi‑Mo. */
+/** Pipeline photo Samsung S20 — ne jamais vider l’input avant d’avoir un Blob indépendant. */
 
 function friendlyPhotoError(err) {
     const m = String(err?.message || err || '');
     if (/failed to fetch|networkerror|network error|load failed|erreur de réseau/i.test(m)) {
         return 'Envoi interrompu — réessayez (vérifiez la connexion)';
     }
-    if (/décodage|dimensions|compression|image/i.test(m)) {
-        return 'Photo illisible — choisissez un autre cliché JPEG';
+    if (/décodage|dimensions|compression|image|illisible/i.test(m)) {
+        return 'Photo illisible — réessayez ou prenez un JPEG avec l’appareil photo';
     }
     return m || 'Impossible d’envoyer la photo';
 }
@@ -214,6 +214,21 @@ function loadImageFromUrl(url) {
     });
 }
 
+function readFileAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            if (typeof reader.result === 'string' && reader.result.startsWith('data:')) {
+                resolve(reader.result);
+            } else {
+                reject(new Error('Lecture photo vide'));
+            }
+        };
+        reader.onerror = () => reject(new Error('Impossible de lire la photo'));
+        reader.readAsDataURL(file);
+    });
+}
+
 async function canvasToJpegBlob(canvas, quality) {
     const blob = await new Promise((resolve) => {
         if (!canvas.toBlob) {
@@ -224,7 +239,6 @@ async function canvasToJpegBlob(canvas, quality) {
     });
     if (blob && blob.size) return blob;
 
-    // Fallback sans fetch() (évite "Failed to fetch" sur certains WebViews)
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
     const parts = dataUrl.split(',');
     const bin = atob(parts[1] || '');
@@ -235,35 +249,85 @@ async function canvasToJpegBlob(canvas, quality) {
     return out;
 }
 
+/**
+ * Décode sans arrayBuffer (souvent bloqué par la galerie Samsung).
+ * Préfère createImageBitmap redimensionné pour éviter les OOM 12 MP.
+ */
+async function decodePhotoDrawable(file) {
+    if (!file) throw new Error('Aucune photo');
+    const maxSide = 1280;
+    const errors = [];
+
+    if (typeof createImageBitmap === 'function') {
+        const attempts = [
+            { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
+            { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'medium' },
+            { resizeWidth: maxSide, resizeQuality: 'low' },
+            { resizeHeight: maxSide, resizeQuality: 'low' },
+            { imageOrientation: 'from-image' },
+            {},
+        ];
+        for (const opts of attempts) {
+            try {
+                const bmp = await createImageBitmap(file, opts);
+                if (bmp?.width && bmp?.height) {
+                    return {
+                        drawable: bmp,
+                        width: bmp.width,
+                        height: bmp.height,
+                        release: () => { try { bmp.close?.(); } catch (_) { /* ok */ } },
+                    };
+                }
+            } catch (e) {
+                errors.push(e);
+            }
+        }
+    }
+
+    const objectUrl = URL.createObjectURL(file);
+    try {
+        const img = await loadImageFromUrl(objectUrl);
+        if (img.decode) {
+            try { await img.decode(); } catch (_) { /* ok */ }
+        }
+        const width = img.naturalWidth || img.width;
+        const height = img.naturalHeight || img.height;
+        if (width && height) {
+            return {
+                drawable: img,
+                width,
+                height,
+                release: () => URL.revokeObjectURL(objectUrl),
+            };
+        }
+        throw new Error('Image sans dimensions');
+    } catch (e) {
+        URL.revokeObjectURL(objectUrl);
+        errors.push(e);
+    }
+
+    try {
+        const dataUrl = await readFileAsDataURL(file);
+        const img = await loadImageFromUrl(dataUrl);
+        const width = img.naturalWidth || img.width;
+        const height = img.naturalHeight || img.height;
+        if (width && height) {
+            return { drawable: img, width, height, release: () => {} };
+        }
+    } catch (e) {
+        errors.push(e);
+    }
+
+    console.warn('decodePhotoDrawable', errors);
+    throw new Error('Décodage image impossible');
+}
+
 async function compressImage(file, maxSize = 1024, quality = 0.78) {
     if (!file) throw new Error('Aucune photo');
 
-    const url = URL.createObjectURL(file);
+    const decoded = await decodePhotoDrawable(file);
     try {
-        let drawable = null;
-        let srcW = 0;
-        let srcH = 0;
-
-        try {
-            const img = await loadImageFromUrl(url);
-            if (img.decode) {
-                try { await img.decode(); } catch (_) { /* ok */ }
-            }
-            drawable = img;
-            srcW = img.naturalWidth || img.width;
-            srcH = img.naturalHeight || img.height;
-        } catch (imgErr) {
-            try {
-                const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
-                drawable = bmp;
-                srcW = bmp.width;
-                srcH = bmp.height;
-            } catch (bmpErr) {
-                console.warn('decode photo', imgErr, bmpErr);
-                throw new Error('Décodage image impossible');
-            }
-        }
-
+        const { drawable, width: srcW, height: srcH } = decoded;
         if (!srcW || !srcH) throw new Error('Image sans dimensions');
 
         const trySizes = [...new Set([maxSize, 900, 720, 512])];
@@ -285,45 +349,68 @@ async function compressImage(file, maxSize = 1024, quality = 0.78) {
                     ctx.fillRect(0, 0, width, height);
                     ctx.drawImage(drawable, 0, 0, width, height);
                     const out = await canvasToJpegBlob(canvas, q);
-                    if (out?.size) {
-                        drawable.close?.();
-                        return out;
-                    }
+                    if (out?.size) return out;
                 } catch (e) {
                     lastErr = e;
                 }
             }
         }
-        drawable.close?.();
         throw lastErr || new Error('Compression impossible');
     } finally {
-        URL.revokeObjectURL(url);
+        decoded.release?.();
     }
 }
 
-/** Toujours renvoyer un JPEG compressé (< ~1,5 Mo) — pas de fallback fichier brut. */
+/** JPEG compressé si possible ; sinon fichier d’origine raisonnable (sans vider l’input). */
 async function preparePhotoForUpload(file) {
     if (!file) throw new Error('Aucune photo');
-    let compressed = await compressImage(file, 1024, 0.78);
-    if (compressed.size > 1_800_000) {
-        compressed = await compressImage(file, 720, 0.55);
+
+    try {
+        let compressed = await compressImage(file, 1024, 0.78);
+        if (compressed.size > 1_800_000) {
+            compressed = await compressImage(file, 720, 0.55);
+        }
+        if (!compressed?.size) throw new Error('Compression impossible');
+        return compressed;
+    } catch (err) {
+        // Repli : envoi du fichier brut tant qu’il est encore attaché à l’input
+        const size = file.size || 0;
+        if (size > 0 && size <= 4_000_000) {
+            console.warn('compression échouée, envoi brut', err);
+            const type = (file.type && file.type.startsWith('image/')) ? file.type : 'image/jpeg';
+            try {
+                return file.slice(0, size, type);
+            } catch (_) {
+                return file;
+            }
+        }
+        throw err;
     }
-    if (!compressed?.size) throw new Error('Compression impossible');
-    return compressed;
 }
 
 async function uploadPhoto(file, prefix) {
     let payload = file;
-    const readyJpeg = file?.type === 'image/jpeg' && file.size > 0 && file.size <= 1_800_000;
+    const readyJpeg = !!(
+        file
+        && file.size > 0
+        && file.size <= 1_800_000
+        && (!file.type || file.type === 'image/jpeg' || file.type === 'image/jpg')
+    );
     if (!readyJpeg) {
         payload = await preparePhotoForUpload(file);
     }
 
-    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
+    const contentType = (payload.type && payload.type.startsWith('image/'))
+        ? payload.type
+        : 'image/jpeg';
+    const ext = contentType.includes('png') ? 'png'
+        : contentType.includes('webp') ? 'webp'
+        : 'jpg';
+    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
     try {
         const { error } = await supabase.storage.from('photos').upload(fileName, payload, {
             cacheControl: '3600',
-            contentType: 'image/jpeg',
+            contentType,
             upsert: false,
         });
         if (error) throw error;
@@ -2104,7 +2191,7 @@ function bindArbreAutosave() {
     form.addEventListener('change', onEdit);
 }
 
-/** Samsung/Android : ouvrir le sélecteur via bouton → input.click() (geste utilisateur). */
+/** Samsung/Android : label[for] ouvre le sélecteur nativement (plus fiable que input.click()). */
 function bindPhotoPickers() {
     if (document.body.dataset.photoPickersBound === '1') return;
     document.body.dataset.photoPickersBound = '1';
@@ -2112,21 +2199,26 @@ function bindPhotoPickers() {
     const wire = (btnId, inputId, onFile) => {
         const btn = document.getElementById(btnId);
         const input = document.getElementById(inputId);
-        if (!btn || !input) return;
+        if (!input) return;
 
-        const openPicker = (e) => {
+        // Avant ouverture : vider pour pouvoir resélectionner le même fichier
+        // (le File n’existe pas encore — sans danger)
+        const onOpenIntent = (e) => {
             if (isGhostClickGuardActive()) {
                 e.preventDefault();
                 e.stopPropagation();
                 return;
             }
-            e.preventDefault();
-            e.stopPropagation();
             try { input.value = ''; } catch (_) { /* ignore */ }
-            input.click();
+            // label[for] ouvre nativement ; bouton = click programmatique
+            const isLabel = btn && (btn.tagName === 'LABEL' || btn.getAttribute('for') === inputId);
+            if (!isLabel) {
+                e.preventDefault();
+                e.stopPropagation();
+                input.click();
+            }
         };
-        btn.addEventListener('click', openPicker);
-        // change est l’événement standard des input file (y compris Chrome Android / Samsung)
+        btn?.addEventListener('click', onOpenIntent);
         input.addEventListener('change', (ev) => onFile(ev));
     };
 
@@ -2139,22 +2231,32 @@ window.previewMainPhoto = async function(event) {
     const raw = input.files?.[0];
     if (!raw) return;
 
-    // Garder la ref File tout de suite (pas de slice — illisible sur certaines galeries S20)
+    // Garder le File attaché à l’input jusqu’à avoir un Blob indépendant
+    // (vider l’input trop tôt = galerie Samsung révoque le fichier)
     pendingArbrePhotoFile = raw;
-    // Permet de resélectionner le même fichier après un échec
-    try { input.value = ''; } catch (_) { /* ok */ }
 
+    let rawPreviewUrl = null;
     try {
         setArbreSaveStatus('Préparation de la photo…', 'is-saving');
-        const src = URL.createObjectURL(raw);
+        rawPreviewUrl = URL.createObjectURL(raw);
         const preview = document.getElementById('form-photo-preview');
-        preview.src = src;
+        preview.src = rawPreviewUrl;
         preview.classList.remove('hidden');
         document.getElementById('form-photo-placeholder').classList.add('hidden');
         document.getElementById('form-photo-box')?.classList.add('has-photo');
 
-        // Compresser tout de suite → petit JPEG en mémoire (pas d’envoi brut multi‑Mo)
-        pendingArbrePhotoFile = await preparePhotoForUpload(raw);
+        const prepared = await preparePhotoForUpload(raw);
+        pendingArbrePhotoFile = prepared;
+
+        // Afficher le blob préparé (indépendant), puis libérer l’URL brute + l’input
+        const readyUrl = URL.createObjectURL(prepared);
+        preview.src = readyUrl;
+        if (rawPreviewUrl) {
+            try { URL.revokeObjectURL(rawPreviewUrl); } catch (_) { /* ok */ }
+            rawPreviewUrl = null;
+        }
+
+        try { input.value = ''; } catch (_) { /* ok */ }
 
         if (document.getElementById('form-id')?.value) {
             setArbreSaveStatus('Envoi de la photo…', 'is-saving');
@@ -2171,11 +2273,15 @@ window.previewMainPhoto = async function(event) {
         pendingArbrePhotoFile = null;
         setArbreSaveStatus('Échec photo', 'is-error');
         showToast(friendlyPhotoError(err), 'danger');
+        if (rawPreviewUrl) {
+            try { URL.revokeObjectURL(rawPreviewUrl); } catch (_) { /* ok */ }
+        }
     }
 };
 
 window.previewSuiviPhoto = async function(event) {
-    const raw = event.target.files?.[0];
+    const input = event.target;
+    const raw = input.files?.[0];
     const nameEl = document.getElementById('suivi-photo-name');
     const tile = document.getElementById('suivi-photo-tile');
     if (!raw) {
@@ -2187,6 +2293,7 @@ window.previewSuiviPhoto = async function(event) {
     try {
         if (nameEl) nameEl.textContent = 'Préparation…';
         pendingSuiviPhotoFile = await preparePhotoForUpload(raw);
+        try { input.value = ''; } catch (_) { /* ok */ }
         if (nameEl) nameEl.textContent = raw.name || 'Photo sélectionnée';
         tile?.classList.add('has-file');
     } catch (err) {
