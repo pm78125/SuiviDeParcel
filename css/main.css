@@ -1380,6 +1380,10 @@ table.inventory td.col-photo {
   margin-bottom: 0.9rem;
 }
 
+.suppress-ghost-click {
+  pointer-events: none !important;
+}
+
 .photo-add-hit {
   position: absolute;
   inset: 0;

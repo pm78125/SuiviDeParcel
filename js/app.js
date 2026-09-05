@@ -873,7 +873,10 @@ window.stopMarkerDrag = async function(e) {
         const { arbre, marker, pointerId } = markerPressPending;
         clearMarkerLongPress();
         try { marker.releasePointerCapture(pointerId); } catch (_) {}
+        // Coupe le click synthétique Android/iOS sous le doigt
+        try { e?.preventDefault?.(); } catch (_) { /* ok */ }
         clearTooltip();
+        lastPointerWasTouch = true;
         ouvrirModalArbre(arbre);
         return;
     }
@@ -1913,9 +1916,40 @@ window.supprimerSuivi = async function(suiviId) {
 }
 
 // --- MODALE ARBRE ---
+/** Après un tap tactile, le navigateur renvoie souvent un click synthétique
+ *  aux mêmes coords — sur la fiche déjà ouverte (photo +, selects…). */
+let ghostClickGuardUntil = 0;
+let ghostClickGuardTimer = null;
+let lastPointerWasTouch = false;
+
+document.addEventListener('pointerdown', (e) => {
+    lastPointerWasTouch = e.pointerType === 'touch' || e.pointerType === 'pen';
+}, true);
+
+function armGhostClickGuard(ms = 550) {
+    ghostClickGuardUntil = Date.now() + ms;
+    const nodes = [
+        document.getElementById('arbre-modal'),
+        document.getElementById('arbre-modal-overlay'),
+        document.getElementById('arbre-modal-content'),
+    ];
+    nodes.forEach((el) => el?.classList.add('suppress-ghost-click'));
+    clearTimeout(ghostClickGuardTimer);
+    ghostClickGuardTimer = setTimeout(() => {
+        nodes.forEach((el) => el?.classList.remove('suppress-ghost-click'));
+        ghostClickGuardUntil = 0;
+    }, ms);
+}
+
+function isGhostClickGuardActive() {
+    return Date.now() < ghostClickGuardUntil;
+}
+
 window.ouvrirModalArbre = function(donnees) {
     try {
     clearTooltip();
+    if (lastPointerWasTouch) armGhostClickGuard(550);
+
     const isNew = !donnees.id;
     arbreSelectionne = isNew ? null : donnees;
     // Marqueur actif seulement (évite de tout redessiner → flash)
@@ -2081,6 +2115,11 @@ function bindPhotoPickers() {
         if (!btn || !input) return;
 
         const openPicker = (e) => {
+            if (isGhostClickGuardActive()) {
+                e.preventDefault();
+                e.stopPropagation();
+                return;
+            }
             e.preventDefault();
             e.stopPropagation();
             try { input.value = ''; } catch (_) { /* ignore */ }
