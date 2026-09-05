@@ -192,17 +192,39 @@ function parseTailleToCm(val) {
     return null;
 }
 
-/** Pipeline photo Samsung S20 — ne jamais vider l’input avant d’avoir un Blob indépendant. */
+/** Pipeline photo Samsung S20 — cloner immédiatement (proxy galerie), puis compresser. */
 
 function friendlyPhotoError(err) {
     const m = String(err?.message || err || '');
     if (/failed to fetch|networkerror|network error|load failed|erreur de réseau/i.test(m)) {
         return 'Envoi interrompu — réessayez (vérifiez la connexion)';
     }
-    if (/décodage|dimensions|compression|image|illisible/i.test(m)) {
-        return 'Photo illisible — réessayez ou prenez un JPEG avec l’appareil photo';
+    if (/notreadable|file.?changed|permission|vide|lecture/i.test(m)) {
+        return 'Fichier inaccessible — ouvrez-le via Fichiers (pas Galerie cloud), ou prenez la photo avec l’appareil';
+    }
+    if (/heic|heif|décodage|dimensions|compression|image|illisible/i.test(m)) {
+        return 'Format non lu — dans Réglages caméra, désactivez HEIF / « Haute efficacité », ou prenez un JPEG';
     }
     return m || 'Impossible d’envoyer la photo';
+}
+
+function sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+}
+
+function isHeicMagic(buffer) {
+    if (!buffer || buffer.byteLength < 12) return false;
+    const u = new Uint8Array(buffer);
+    const ascii = String.fromCharCode(...u.slice(4, 16));
+    return ascii.startsWith('ftyp') && /heic|heif|mif1|msf1|heim|heis|hevx/i.test(ascii);
+}
+
+function looksLikeHeic(file, buffer) {
+    const type = (file?.type || '').toLowerCase();
+    const name = (file?.name || '').toLowerCase();
+    if (type.includes('heic') || type.includes('heif')) return true;
+    if (/\.heic$|\.heif$/i.test(name)) return true;
+    return !!(buffer && isHeicMagic(buffer));
 }
 
 function loadImageFromUrl(url) {
@@ -211,21 +233,6 @@ function loadImageFromUrl(url) {
         img.onload = () => resolve(img);
         img.onerror = () => reject(new Error('Décodage image impossible'));
         img.src = url;
-    });
-}
-
-function readFileAsDataURL(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            if (typeof reader.result === 'string' && reader.result.startsWith('data:')) {
-                resolve(reader.result);
-            } else {
-                reject(new Error('Lecture photo vide'));
-            }
-        };
-        reader.onerror = () => reject(new Error('Impossible de lire la photo'));
-        reader.readAsDataURL(file);
     });
 }
 
@@ -250,40 +257,132 @@ async function canvasToJpegBlob(canvas, quality) {
 }
 
 /**
- * Décode sans arrayBuffer (souvent bloqué par la galerie Samsung).
- * Préfère createImageBitmap redimensionné pour éviter les OOM 12 MP.
+ * Critique Samsung/Chrome : lire le File tout de suite dans un Blob mémoire,
+ * sinon le proxy Galerie devient NotReadableError / ERR_UPLOAD_FILE_CHANGED.
  */
+async function materializePhoto(file) {
+    if (!file) throw new Error('Aucune photo');
+
+    let buffer = null;
+    let lastErr = null;
+
+    const tryRead = async () => {
+        try {
+            const buf = await file.arrayBuffer();
+            if (buf && buf.byteLength) return buf;
+        } catch (e) {
+            lastErr = e;
+        }
+        try {
+            return await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const r = reader.result;
+                    if (r && r.byteLength) resolve(r);
+                    else reject(new Error('Lecture photo vide'));
+                };
+                reader.onerror = () => reject(reader.error || new Error('Impossible de lire la photo'));
+                reader.readAsArrayBuffer(file);
+            });
+        } catch (e) {
+            lastErr = e;
+            return null;
+        }
+    };
+
+    // 1) Lecture immédiate — ne pas attendre (sinon Chrome Android invalide le proxy)
+    if (file.size > 0) {
+        buffer = await tryRead();
+    }
+
+    // 2) Taille 0 / lecture ratée : courtes retries (téléchargement cloud galerie)
+    if (!buffer || !buffer.byteLength) {
+        let lastSize = file.size || 0;
+        const t0 = Date.now();
+        while (Date.now() - t0 < 3000) {
+            await sleep(100);
+            const s = file.size || 0;
+            if (s > 0 && (s === lastSize || Date.now() - t0 > 400)) {
+                buffer = await tryRead();
+                if (buffer && buffer.byteLength) break;
+            }
+            lastSize = s;
+        }
+    }
+
+    if (!buffer || !buffer.byteLength) {
+        if (file.size > 0) return file;
+        throw lastErr || new Error('Photo vide — attendez la fin du chargement dans la galerie');
+    }
+
+    let type = (file.type && file.type !== 'application/octet-stream') ? file.type : '';
+    if (!type || type === 'application/octet-stream') {
+        if (isHeicMagic(buffer)) type = 'image/heic';
+        else if (buffer.byteLength >= 2) {
+            const u = new Uint8Array(buffer);
+            if (u[0] === 0xFF && u[1] === 0xD8) type = 'image/jpeg';
+            else if (u[0] === 0x89 && u[1] === 0x50) type = 'image/png';
+            else type = 'image/jpeg';
+        } else {
+            type = 'image/jpeg';
+        }
+    }
+
+    const name = (file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo';
+    try {
+        const out = new File([buffer], `${name}.bin`, { type, lastModified: Date.now() });
+        out._buffer = buffer;
+        return out;
+    } catch (_) {
+        const out = new Blob([buffer], { type });
+        out._buffer = buffer;
+        out.name = `${name}.bin`;
+        return out;
+    }
+}
+
+async function convertHeicToJpeg(blob) {
+    const buffer = blob._buffer || null;
+    if (!looksLikeHeic(blob, buffer)) return blob;
+
+    try {
+        if (!window.heic2any) {
+            await new Promise((resolve, reject) => {
+                const existing = document.querySelector('script[data-heic2any]');
+                if (existing) {
+                    existing.addEventListener('load', resolve);
+                    existing.addEventListener('error', reject);
+                    return;
+                }
+                const s = document.createElement('script');
+                s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+                s.async = true;
+                s.dataset.heic2any = '1';
+                s.onload = resolve;
+                s.onerror = () => reject(new Error('Chargement convertisseur HEIC impossible'));
+                document.head.appendChild(s);
+            });
+        }
+        const result = await window.heic2any({
+            blob,
+            toType: 'image/jpeg',
+            quality: 0.72,
+        });
+        const jpeg = Array.isArray(result) ? result[0] : result;
+        if (!jpeg?.size) throw new Error('Conversion HEIC vide');
+        return new Blob([jpeg], { type: 'image/jpeg' });
+    } catch (e) {
+        console.warn('heic2any', e);
+        throw new Error('HEIC non supporté — désactivez « Haute efficacité » dans la caméra');
+    }
+}
+
 async function decodePhotoDrawable(file) {
     if (!file) throw new Error('Aucune photo');
     const maxSide = 1280;
     const errors = [];
 
-    if (typeof createImageBitmap === 'function') {
-        const attempts = [
-            { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
-            { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'medium' },
-            { resizeWidth: maxSide, resizeQuality: 'low' },
-            { resizeHeight: maxSide, resizeQuality: 'low' },
-            { imageOrientation: 'from-image' },
-            {},
-        ];
-        for (const opts of attempts) {
-            try {
-                const bmp = await createImageBitmap(file, opts);
-                if (bmp?.width && bmp?.height) {
-                    return {
-                        drawable: bmp,
-                        width: bmp.width,
-                        height: bmp.height,
-                        release: () => { try { bmp.close?.(); } catch (_) { /* ok */ } },
-                    };
-                }
-            } catch (e) {
-                errors.push(e);
-            }
-        }
-    }
-
+    // Blob mémoire → ObjectURL en premier (le plus fiable après materialize)
     const objectUrl = URL.createObjectURL(file);
     try {
         const img = await loadImageFromUrl(objectUrl);
@@ -306,16 +405,29 @@ async function decodePhotoDrawable(file) {
         errors.push(e);
     }
 
-    try {
-        const dataUrl = await readFileAsDataURL(file);
-        const img = await loadImageFromUrl(dataUrl);
-        const width = img.naturalWidth || img.width;
-        const height = img.naturalHeight || img.height;
-        if (width && height) {
-            return { drawable: img, width, height, release: () => {} };
+    if (typeof createImageBitmap === 'function') {
+        const attempts = [
+            { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'medium' },
+            { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'medium' },
+            { resizeWidth: maxSide, resizeQuality: 'low' },
+            { imageOrientation: 'from-image' },
+            {},
+        ];
+        for (const opts of attempts) {
+            try {
+                const bmp = await createImageBitmap(file, opts);
+                if (bmp?.width && bmp?.height) {
+                    return {
+                        drawable: bmp,
+                        width: bmp.width,
+                        height: bmp.height,
+                        release: () => { try { bmp.close?.(); } catch (_) { /* ok */ } },
+                    };
+                }
+            } catch (e) {
+                errors.push(e);
+            }
         }
-    } catch (e) {
-        errors.push(e);
     }
 
     console.warn('decodePhotoDrawable', errors);
@@ -361,28 +473,28 @@ async function compressImage(file, maxSize = 1024, quality = 0.78) {
     }
 }
 
-/** JPEG compressé si possible ; sinon fichier d’origine raisonnable (sans vider l’input). */
+/** Clone mémoire → HEIC→JPEG → compression ; sinon envoi du blob mémoire. */
 async function preparePhotoForUpload(file) {
     if (!file) throw new Error('Aucune photo');
 
+    const local = await materializePhoto(file);
+    const normalized = await convertHeicToJpeg(local);
+
     try {
-        let compressed = await compressImage(file, 1024, 0.78);
+        let compressed = await compressImage(normalized, 1024, 0.78);
         if (compressed.size > 1_800_000) {
-            compressed = await compressImage(file, 720, 0.55);
+            compressed = await compressImage(normalized, 720, 0.55);
         }
         if (!compressed?.size) throw new Error('Compression impossible');
         return compressed;
     } catch (err) {
-        // Repli : envoi du fichier brut tant qu’il est encore attaché à l’input
-        const size = file.size || 0;
-        if (size > 0 && size <= 4_000_000) {
-            console.warn('compression échouée, envoi brut', err);
-            const type = (file.type && file.type.startsWith('image/')) ? file.type : 'image/jpeg';
-            try {
-                return file.slice(0, size, type);
-            } catch (_) {
-                return file;
-            }
+        const size = normalized.size || 0;
+        if (size > 0 && size <= 6_000_000) {
+            console.warn('compression échouée, envoi du blob mémoire', err);
+            const type = (normalized.type && normalized.type.startsWith('image/') && !/heic|heif/i.test(normalized.type))
+                ? normalized.type
+                : 'image/jpeg';
+            return new Blob([normalized], { type });
         }
         throw err;
     }
@@ -394,13 +506,13 @@ async function uploadPhoto(file, prefix) {
         file
         && file.size > 0
         && file.size <= 1_800_000
-        && (!file.type || file.type === 'image/jpeg' || file.type === 'image/jpg')
+        && (file.type === 'image/jpeg' || file.type === 'image/jpg')
     );
     if (!readyJpeg) {
         payload = await preparePhotoForUpload(file);
     }
 
-    const contentType = (payload.type && payload.type.startsWith('image/'))
+    const contentType = (payload.type && payload.type.startsWith('image/') && !/heic|heif/i.test(payload.type))
         ? payload.type
         : 'image/jpeg';
     const ext = contentType.includes('png') ? 'png'
@@ -2231,32 +2343,22 @@ window.previewMainPhoto = async function(event) {
     const raw = input.files?.[0];
     if (!raw) return;
 
-    // Garder le File attaché à l’input jusqu’à avoir un Blob indépendant
-    // (vider l’input trop tôt = galerie Samsung révoque le fichier)
     pendingArbrePhotoFile = raw;
 
-    let rawPreviewUrl = null;
     try {
-        setArbreSaveStatus('Préparation de la photo…', 'is-saving');
-        rawPreviewUrl = URL.createObjectURL(raw);
-        const preview = document.getElementById('form-photo-preview');
-        preview.src = rawPreviewUrl;
-        preview.classList.remove('hidden');
-        document.getElementById('form-photo-placeholder').classList.add('hidden');
-        document.getElementById('form-photo-box')?.classList.add('has-photo');
-
+        // PRIORITÉ : cloner en mémoire avant tout (preview, compression, clear input)
+        setArbreSaveStatus('Lecture de la photo…', 'is-saving');
         const prepared = await preparePhotoForUpload(raw);
         pendingArbrePhotoFile = prepared;
 
-        // Afficher le blob préparé (indépendant), puis libérer l’URL brute + l’input
-        const readyUrl = URL.createObjectURL(prepared);
-        preview.src = readyUrl;
-        if (rawPreviewUrl) {
-            try { URL.revokeObjectURL(rawPreviewUrl); } catch (_) { /* ok */ }
-            rawPreviewUrl = null;
-        }
-
         try { input.value = ''; } catch (_) { /* ok */ }
+
+        const readyUrl = URL.createObjectURL(prepared);
+        const preview = document.getElementById('form-photo-preview');
+        preview.src = readyUrl;
+        preview.classList.remove('hidden');
+        document.getElementById('form-photo-placeholder').classList.add('hidden');
+        document.getElementById('form-photo-box')?.classList.add('has-photo');
 
         if (document.getElementById('form-id')?.value) {
             setArbreSaveStatus('Envoi de la photo…', 'is-saving');
@@ -2273,9 +2375,6 @@ window.previewMainPhoto = async function(event) {
         pendingArbrePhotoFile = null;
         setArbreSaveStatus('Échec photo', 'is-error');
         showToast(friendlyPhotoError(err), 'danger');
-        if (rawPreviewUrl) {
-            try { URL.revokeObjectURL(rawPreviewUrl); } catch (_) { /* ok */ }
-        }
     }
 };
 
