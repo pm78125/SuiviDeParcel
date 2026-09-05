@@ -30,13 +30,21 @@ export function parseTailleToCm(val) {
 }
 
 export async function compressImage(file, maxSize = 1600, quality = 0.82) {
-  if (!file || !file.type.startsWith('image/')) return file;
+  if (!file) return file;
+  const type = (file.type || '').toLowerCase();
+  const okType = type.startsWith('image/') || !type || type === 'application/octet-stream';
+  if (!okType) return file;
   try {
-    const bitmap = await createImageBitmap(file);
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    } catch (_) {
+      bitmap = await createImageBitmap(file);
+    }
     let { width, height } = bitmap;
     const scale = Math.min(1, maxSize / Math.max(width, height));
-    width = Math.round(width * scale);
-    height = Math.round(height * scale);
+    width = Math.max(1, Math.round(width * scale));
+    height = Math.max(1, Math.round(height * scale));
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
@@ -44,8 +52,13 @@ export async function compressImage(file, maxSize = 1600, quality = 0.82) {
     bitmap.close?.();
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', quality));
     if (!blob) return file;
-    const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
-    return new File([blob], `${base}.jpg`, { type: 'image/jpeg' });
+    const base = (file.name || 'photo').replace(/\.[^.]+$/, '') || 'photo';
+    try {
+      return new File([blob], `${base}.jpg`, { type: 'image/jpeg' });
+    } catch (_) {
+      blob.name = `${base}.jpg`;
+      return blob;
+    }
   } catch (e) {
     console.warn('Compression impossible, envoi brut', e);
     return file;

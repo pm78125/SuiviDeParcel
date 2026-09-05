@@ -193,17 +193,28 @@ function parseTailleToCm(val) {
 }
 
 async function fileToDrawable(file, maxSide = 1600) {
-    // Redimensionne dès le décodage (évite OOM sur photos Samsung 12+ MP)
+    const orient = { imageOrientation: 'from-image' };
+    // 1) Décodage normal (respecte EXIF — crucial sur Samsung)
     try {
-        return await createImageBitmap(file, {
-            resizeWidth: maxSide,
-            resizeHeight: maxSide,
-            resizeQuality: 'high',
-        });
-    } catch (_) { /* API non supportée ou format */ }
+        const full = await createImageBitmap(file, orient);
+        const side = Math.max(full.width, full.height);
+        if (side <= maxSide) return full;
+        // 2) Redimensionne en gardant le ratio (une seule dimension — pas les deux)
+        const opts = { ...orient, resizeQuality: 'high' };
+        if (full.width >= full.height) opts.resizeWidth = maxSide;
+        else opts.resizeHeight = maxSide;
+        full.close?.();
+        try {
+            return await createImageBitmap(file, opts);
+        } catch (_) {
+            return createImageBitmap(file, orient);
+        }
+    } catch (_) { /* API / format */ }
+
     try {
         return await createImageBitmap(file);
     } catch (_) { /* HEIC / WebView */ }
+
     return new Promise((resolve, reject) => {
         const url = URL.createObjectURL(file);
         const img = new Image();
@@ -237,11 +248,10 @@ async function compressImage(file, maxSize = 1600, quality = 0.82) {
             const srcW = drawable.naturalWidth || drawable.width;
             const srcH = drawable.naturalHeight || drawable.height;
             if (!srcW || !srcH) throw new Error('dimensions invalides');
-            let width = srcW;
-            let height = srcH;
-            const scale = Math.min(1, size / Math.max(width, height));
-            width = Math.max(1, Math.round(width * scale));
-            height = Math.max(1, Math.round(height * scale));
+            // Toujours recalculer le ratio depuis les dimensions réelles (jamais forcer un carré)
+            const scale = Math.min(1, size / Math.max(srcW, srcH));
+            const width = Math.max(1, Math.round(srcW * scale));
+            const height = Math.max(1, Math.round(srcH * scale));
             const canvas = document.createElement('canvas');
             canvas.width = width;
             canvas.height = height;
@@ -255,7 +265,6 @@ async function compressImage(file, maxSize = 1600, quality = 0.82) {
             try {
                 return new File([blob], `${base}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
             } catch (_) {
-                // Certains Android refusent new File() — Blob suffit pour Storage
                 blob.name = `${base}.jpg`;
                 return blob;
             }
