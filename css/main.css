@@ -934,6 +934,13 @@ h1, h2, h3, h4, .display {
   justify-content: center;
   touch-action: none;
 }
+@media (pointer: coarse) {
+  .tree-marker {
+    /* zone tactile un peu plus large, sans bloquer le pan avant l’appui long */
+    width: 22px;
+    height: 22px;
+  }
+}
 .tree-marker.is-dragging-marker,
 .tree-marker:active { cursor: grabbing; }
 .tree-marker::after {
@@ -946,7 +953,7 @@ h1, h2, h3, h4, .display {
 }
 .tree-marker:hover { transform: translate(-50%, -50%) scale(1.4); z-index: 30; }
 .tree-marker.active { transform: translate(-50%, -50%) scale(1.5); border-color: #f0d78c; z-index: 35; }
-.tree-marker.is-lifting { transform: translate(-50%, -50%) scale(1.55); z-index: 50; }
+.tree-marker.is-lifting { transform: translate(-50%, -50%) scale(1.55); z-index: 50; box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
 .marker-malade { animation: pulse-opacity 2s infinite alternate ease-in-out; border-color: #ef4444; }
 .marker-mort { opacity: 0.4; filter: grayscale(100%); border-color: #000; }
 @keyframes pulse-opacity {

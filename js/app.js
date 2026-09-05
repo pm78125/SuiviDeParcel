@@ -678,20 +678,36 @@ window.ouvrirChoixAjoutArbre = function() { window.toggleModeAjout(); }
 function desactiverModeAjout() { if (modeAjout) toggleModeAjout(); }
 
 // --- DRAG MARQUEURS ---
+// Souris : drag immédiat. Tactile : appui long (~0,4 s) pour déplacer, sinon pan / ouverture fiche.
+const MARKER_LONG_PRESS_MS = 420;
+const MARKER_PAN_SLOP_PX = 10;
+
 let isDraggingMarker = false;
 let markerHasMoved = false;
 let currentDragMarker = null;
 let currentDragArbre = null;
 let startClientX, startClientY, startXPercent, startYPercent, startMapW, startMapH;
+let markerLongPressTimer = null;
+let markerPressPending = null;
 
-window.initMarkerDrag = function(e, arbre, marker) {
-    e.stopPropagation();
-    e.preventDefault();
+function isTouchLikePointer(e) {
+    return e.pointerType === 'touch' || e.pointerType === 'pen';
+}
+
+function clearMarkerLongPress() {
+    if (markerLongPressTimer) {
+        clearTimeout(markerLongPressTimer);
+        markerLongPressTimer = null;
+    }
+    markerPressPending = null;
+}
+
+function beginMarkerDragSession(e, arbre, marker) {
     isDraggingMarker = true;
     markerHasMoved = false;
     currentDragMarker = marker;
     currentDragArbre = arbre;
-    marker.classList.add('is-dragging-marker');
+    marker.classList.add('is-dragging-marker', 'is-lifting');
     clearTooltip();
     startClientX = e.clientX;
     startClientY = e.clientY;
@@ -701,9 +717,78 @@ window.initMarkerDrag = function(e, arbre, marker) {
     startMapW = img.offsetWidth;
     startMapH = img.offsetHeight;
     try { marker.setPointerCapture(e.pointerId); } catch (_) {}
+    try { navigator.vibrate?.(25); } catch (_) {}
 }
 
+function handOffMarkerToMapPan(e) {
+    const pending = markerPressPending;
+    clearMarkerLongPress();
+    isDraggingMarker = false;
+    markerHasMoved = false;
+    currentDragMarker = null;
+    currentDragArbre = null;
+
+    if (pending?.marker) {
+        try { pending.marker.releasePointerCapture(pending.pointerId); } catch (_) {}
+    }
+
+    if (modeAjout) return;
+
+    isDownMap = true;
+    hasDraggedMap = true;
+    mapPointerStart = { x: e.clientX, y: e.clientY };
+    startMapX = e.clientX;
+    startMapY = e.clientY;
+    scrollLeft = scrollArea.scrollLeft;
+    scrollTop = scrollArea.scrollTop;
+    scrollArea.classList.add('is-dragging');
+    try { scrollArea.setPointerCapture(e.pointerId); } catch (_) {}
+}
+
+window.initMarkerDrag = function(e, arbre, marker) {
+    if (e.button != null && e.button !== 0) return;
+    e.stopPropagation();
+
+    if (isTouchLikePointer(e)) {
+        // Pas de drag immédiat : appui long requis. Capture pour suivre le doigt hors du point.
+        clearMarkerLongPress();
+        markerPressPending = {
+            arbre,
+            marker,
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+        };
+        try { marker.setPointerCapture(e.pointerId); } catch (_) {}
+        markerLongPressTimer = setTimeout(() => {
+            const pending = markerPressPending;
+            if (!pending || pending.marker !== marker) return;
+            markerLongPressTimer = null;
+            markerPressPending = null;
+            beginMarkerDragSession(
+                { clientX: pending.startX, clientY: pending.startY, pointerId: pending.pointerId },
+                pending.arbre,
+                pending.marker
+            );
+        }, MARKER_LONG_PRESS_MS);
+        return;
+    }
+
+    e.preventDefault();
+    clearMarkerLongPress();
+    beginMarkerDragSession(e, arbre, marker);
+};
+
 window.onMarkerDrag = function(e) {
+    if (markerPressPending && !isDraggingMarker) {
+        const dx = e.clientX - markerPressPending.startX;
+        const dy = e.clientY - markerPressPending.startY;
+        if (Math.abs(dx) > MARKER_PAN_SLOP_PX || Math.abs(dy) > MARKER_PAN_SLOP_PX) {
+            handOffMarkerToMapPan(e);
+        }
+        return;
+    }
+
     if (!isDraggingMarker || !currentDragMarker) return;
     const dx = e.clientX - startClientX;
     const dy = e.clientY - startClientY;
@@ -729,9 +814,19 @@ window.onMarkerDrag = function(e) {
         currentDragArbre.temp_x = newX;
         currentDragArbre.temp_y = newY;
     }
-}
+};
 
 window.stopMarkerDrag = async function(e) {
+    // Tap court sur tactile → ouvrir la fiche (pas de déplacement)
+    if (markerPressPending && !isDraggingMarker) {
+        const { arbre, marker, pointerId } = markerPressPending;
+        clearMarkerLongPress();
+        try { marker.releasePointerCapture(pointerId); } catch (_) {}
+        clearTooltip();
+        ouvrirModalArbre(arbre);
+        return;
+    }
+
     if (!isDraggingMarker || !currentDragMarker) return;
     const marker = currentDragMarker;
     const arbre = currentDragArbre;
@@ -759,9 +854,10 @@ window.stopMarkerDrag = async function(e) {
         clearTooltip();
         ouvrirModalArbre(arbre);
     }
-}
+};
 
 window.cancelMarkerDrag = function(e) {
+    clearMarkerLongPress();
     if (!isDraggingMarker || !currentDragMarker) return;
     isDraggingMarker = false;
     try { currentDragMarker.releasePointerCapture(e.pointerId); } catch (_) {}
@@ -771,7 +867,7 @@ window.cancelMarkerDrag = function(e) {
     currentDragMarker = null;
     currentDragArbre = null;
     markerHasMoved = false;
-}
+};
 
 // --- INIT ---
 function setOfflineBanner(offline) {
