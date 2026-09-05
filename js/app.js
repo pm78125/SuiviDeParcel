@@ -311,7 +311,7 @@ function updateZoomControlsUi() {
     }
     if (btnFit) {
         btnFit.disabled = Math.abs(z - 100) < 1;
-        btnFit.title = 'Ajuster à l’écran (100 %)';
+        btnFit.title = 'Ajuster le plan à l’écran';
     }
 }
 
