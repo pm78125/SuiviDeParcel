@@ -451,26 +451,33 @@ h1, h2, h3, h4, .display {
 
 #map-controls {
   position: absolute;
-  top: 0.85rem;
+  top: auto;
+  bottom: 0.85rem;
   right: 0.85rem;
-  z-index: 80;
+  z-index: 120;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
   padding: 0.45rem;
   border-radius: 1rem;
-  background: rgba(255,255,255,0.92);
+  background: rgba(255,255,255,0.96);
   border: 1px solid var(--line);
   backdrop-filter: blur(10px);
   box-shadow: var(--shadow);
   pointer-events: auto;
   touch-action: manipulation;
 }
+#map-controls.hidden { display: none !important; }
 #map-controls .btn-icon {
   display: grid;
   place-items: center;
+  width: 2.6rem;
+  height: 2.6rem;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
+  cursor: pointer;
+  position: relative;
+  z-index: 1;
 }
 #map-controls .btn-icon .icon {
   pointer-events: none;
@@ -1829,20 +1836,20 @@ table.inventory td.col-photo {
   }
 
   #map-controls {
-    top: calc(4.6rem + var(--safe-top, 0px));
-    bottom: auto;
+    top: auto;
+    bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 0.85rem);
     right: 0.75rem;
-    z-index: 90;
+    z-index: 120;
     pointer-events: auto;
   }
   #map-controls .btn-icon {
     touch-action: manipulation;
-    min-width: 2.75rem;
-    min-height: 2.75rem;
+    min-width: 2.85rem;
+    min-height: 2.85rem;
   }
   body[data-view="gps"] #map-controls {
-    top: calc(4.6rem + var(--safe-top, 0px));
-    bottom: auto;
+    top: auto;
+    bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 0.85rem);
   }
   #map-legend {
     top: auto;
@@ -1907,8 +1914,8 @@ table.inventory td.col-photo {
   }
   .gps-cal-actions .btn { flex: 1; }
   .map-shell.is-calibrating #map-controls {
-    top: calc(4.6rem + var(--safe-top, 0px));
-    bottom: auto;
+    top: auto;
+    bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 0.85rem);
   }
   .gps-cal-step-actions { flex-direction: column; }
 

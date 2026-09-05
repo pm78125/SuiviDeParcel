@@ -226,13 +226,13 @@ async function uploadPhoto(file, prefix) {
 
 // --- ZOOM / ROTATION ---
 let zoomLevel = parseInt(localStorage.getItem('mapZoom'), 10);
-if (!Number.isFinite(zoomLevel)) zoomLevel = 100;
+if (!Number.isFinite(zoomLevel) || zoomLevel < 40 || zoomLevel > 25000) zoomLevel = 100;
 let rotationDeg = parseInt(localStorage.getItem('mapRotation'), 10);
 if (!Number.isFinite(rotationDeg)) rotationDeg = 0;
 
 function persistMapView() {
     try {
-        localStorage.setItem('mapZoom', String(zoomLevel));
+        localStorage.setItem('mapZoom', String(Math.round(zoomLevel)));
         localStorage.setItem('mapRotation', String(rotationDeg));
     } catch (_) { /* private mode / quota */ }
 }
@@ -242,44 +242,58 @@ function maxZoomLevel() {
     const img = document.getElementById('map-image');
     const base = Number(window.baseMapWidth) || 800;
     if (img?.naturalWidth > 0 && base > 0) {
-        // Jusqu’à ~10 px écran par px image (très proche)
         return Math.min(25000, Math.max(5000, Math.round((img.naturalWidth * 10 / base) * 100)));
     }
     return 10000;
 }
 
 function zoomStep(deltaSign) {
-    // Pas plus grand quand on est déjà bien zoomé
-    if (zoomLevel >= 2000) return deltaSign * 200;
-    if (zoomLevel >= 800) return deltaSign * 100;
-    if (zoomLevel >= 300) return deltaSign * 50;
+    const z = Number(zoomLevel) || 100;
+    if (z >= 2000) return deltaSign * 200;
+    if (z >= 800) return deltaSign * 100;
+    if (z >= 300) return deltaSign * 50;
     return deltaSign * 40;
 }
 
-window.changerZoom = function(delta) {
-    const step = typeof delta === 'number' ? delta : zoomStep(1);
-    const next = Math.max(40, Math.min(maxZoomLevel(), zoomLevel + step));
-    if (next === zoomLevel) return;
+function applyZoom(nextLevel, { clientX = null, clientY = null, persist = true } = {}) {
     const area = document.getElementById('map-scroll-area');
+    const wrapper = document.getElementById('map-content-wrapper');
+    if (!wrapper) return;
+
+    const maxZ = maxZoomLevel();
+    const next = Math.max(40, Math.min(maxZ, Number(nextLevel) || 100));
+    if (!Number.isFinite(next) || Math.abs(next - zoomLevel) < 0.01) return;
+
     let anchor = null;
     if (area && area.scrollWidth > 0 && area.scrollHeight > 0) {
+        const rect = area.getBoundingClientRect();
+        const ox = clientX != null ? (clientX - rect.left) : area.clientWidth / 2;
+        const oy = clientY != null ? (clientY - rect.top) : area.clientHeight / 2;
         anchor = {
-            xRatio: (area.scrollLeft + area.clientWidth / 2) / area.scrollWidth,
-            yRatio: (area.scrollTop + area.clientHeight / 2) / area.scrollHeight,
+            xRatio: (area.scrollLeft + ox) / area.scrollWidth,
+            yRatio: (area.scrollTop + oy) / area.scrollHeight,
+            ox, oy,
         };
     }
+
     zoomLevel = next;
-    persistMapView();
+    if (persist) persistMapView();
     appliquerTransformations();
+
     if (anchor && area) {
         requestAnimationFrame(() => {
-            area.scrollLeft = anchor.xRatio * area.scrollWidth - area.clientWidth / 2;
-            area.scrollTop = anchor.yRatio * area.scrollHeight - area.clientHeight / 2;
+            area.scrollLeft = anchor.xRatio * area.scrollWidth - anchor.ox;
+            area.scrollTop = anchor.yRatio * area.scrollHeight - anchor.oy;
         });
     }
+}
+
+window.changerZoom = function(delta) {
+    const step = typeof delta === 'number' && Number.isFinite(delta) ? delta : zoomStep(1);
+    applyZoom(zoomLevel + step);
 };
-window.zoomIn = function() { window.changerZoom(zoomStep(1)); };
-window.zoomOut = function() { window.changerZoom(zoomStep(-1)); };
+window.zoomIn = function() { applyZoom(zoomLevel + zoomStep(1)); };
+window.zoomOut = function() { applyZoom(zoomLevel + zoomStep(-1)); };
 
 window.changerRotation = function(delta) {
     rotationDeg += delta;
@@ -291,52 +305,44 @@ function appliquerTransformations() {
     const wrapper = document.getElementById('map-content-wrapper');
     if (!wrapper) return;
     const base = Number(window.baseMapWidth) || 800;
-    const newWidth = Math.max(40, base * (zoomLevel / 100));
+    const z = Number.isFinite(zoomLevel) ? zoomLevel : 100;
+    const newWidth = Math.max(40, base * (z / 100));
     wrapper.style.width = `${newWidth}px`;
     wrapper.style.maxWidth = 'none';
     wrapper.style.transform = `rotate(${rotationDeg}deg)`;
 }
 
 function setZoomLevel(level, { persist = true, anchorClientX = null, anchorClientY = null } = {}) {
-    const area = document.getElementById('map-scroll-area');
-    let anchor = null;
-    if (area && area.scrollWidth > 0) {
-        if (anchorClientX != null && anchorClientY != null) {
-            const rect = area.getBoundingClientRect();
-            const localX = area.scrollLeft + (anchorClientX - rect.left);
-            const localY = area.scrollTop + (anchorClientY - rect.top);
-            anchor = {
-                xRatio: localX / area.scrollWidth,
-                yRatio: localY / Math.max(area.scrollHeight, 1),
-                offsetX: anchorClientX - rect.left,
-                offsetY: anchorClientY - rect.top,
-            };
-        } else {
-            anchor = {
-                xRatio: (area.scrollLeft + area.clientWidth / 2) / area.scrollWidth,
-                yRatio: (area.scrollTop + area.clientHeight / 2) / area.scrollHeight,
-                offsetX: area.clientWidth / 2,
-                offsetY: area.clientHeight / 2,
-            };
-        }
-    }
-    zoomLevel = Math.max(40, Math.min(maxZoomLevel(), level));
-    if (persist) persistMapView();
-    appliquerTransformations();
-    if (anchor && area) {
-        requestAnimationFrame(() => {
-            area.scrollLeft = anchor.xRatio * area.scrollWidth - anchor.offsetX;
-            area.scrollTop = anchor.yRatio * area.scrollHeight - anchor.offsetY;
-        });
-    }
+    applyZoom(level, {
+        clientX: anchorClientX,
+        clientY: anchorClientY,
+        persist,
+    });
 }
 
 function bindMapControlButtons() {
     const root = document.getElementById('map-controls');
     if (!root || root.dataset.bound === '1') return;
     root.dataset.bound = '1';
-    // Les boutons ont déjà onclick ; on évite juste que le pan carte capture le geste
-    root.addEventListener('pointerdown', (e) => e.stopPropagation());
+
+    const run = (action) => {
+        if (action === 'zoom-in') window.zoomIn();
+        else if (action === 'zoom-out') window.zoomOut();
+        else if (action === 'rotate') window.changerRotation(90);
+    };
+
+    root.querySelectorAll('[data-map-action]').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            run(btn.getAttribute('data-map-action'));
+        });
+    });
+
+    // Empêche le pan de la carte d’avaler le geste sur les contrôles
+    root.addEventListener('pointerdown', (e) => {
+        e.stopPropagation();
+    });
 }
 
 // --- PAN (souris + tactile) + PLACEMENT ARBRE ---
