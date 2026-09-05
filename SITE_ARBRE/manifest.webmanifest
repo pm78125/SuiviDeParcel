@@ -1,0 +1,26 @@
+{
+  "name": "TreeTracker — Suivi de parcelle",
+  "short_name": "TreeTracker",
+  "description": "Inventaire et suivi des arbres de votre parcelle, même hors ligne.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#eef4ef",
+  "theme_color": "#0f3d2e",
+  "lang": "fr",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f3d2e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <title>TreeTracker</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/css/main.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body data-view="plan">
+
+  <div id="offline-banner" class="hidden" role="status" aria-live="polite">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8.8A15 15 0 0112 5c2.2 0 4.3.5 6.2 1.3M4.9 12.3A10 10 0 0112 10c1.3 0 2.6.3 3.8.7M8.5 15.5a5 5 0 013.5-1.3c.6 0 1.2.1 1.7.3M12 19h.01M3 3l18 18"/></svg>
+    Mode hors ligne — données en cache
+  </div>
+
+  <div id="app-loader" role="status" aria-live="polite">
+    <div class="loader-ring" aria-hidden="true"></div>
+    <p>Chargement de la parcelle…</p>
+  </div>
+
+  <div id="sidebar-overlay" class="hidden" onclick="fermerSidebar()"></div>
+
+  <aside id="sidebar" class="sidebar" aria-label="Navigation principale">
+    <div class="sidebar-brand">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c.5 3 2 5 4 6.5C18.5 11 20 13 20 16a8 8 0 11-16 0c0-3 1.5-5 4-6.5C10 8 11.5 6 12 3z"/><path d="M12 14v7"/></svg>
+        </div>
+        <div>
+          <h1 class="brand-title">TreeTracker</h1>
+          <p class="brand-sub">Gestion de parcelle</p>
+        </div>
+      </div>
+      <button type="button" class="icon-btn-close menu-toggle" onclick="fermerSidebar()" aria-label="Fermer le menu">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <nav class="nav" aria-label="Vues">
+      <button type="button" id="btn-plan" class="nav-btn is-active" onclick="switchView('plan')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 20l-5.447-2.724A2 2 0 013 15.382V6.618a2 2 0 011.553-1.947L9 2m0 18l6-3m-6 3V2m6 15l5.447 2.724A2 2 0 0021 18.382V9.618a2 2 0 00-1.553-1.947L15 6m0 11V6m0 0L9 2"/></svg>
+        Plan
+      </button>
+      <button type="button" id="btn-table" class="nav-btn" onclick="switchView('table')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M3 10h18M3 14h18M3 18h18"/></svg>
+        Inventaire
+      </button>
+      <button type="button" id="btn-dashboard" class="nav-btn" onclick="switchView('dashboard')">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5M4 19h16M8 17V10M12 17V7M16 17v-4"/></svg>
+        Tableau de bord
+      </button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button type="button" class="side-link" onclick="exporterCSV()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v10M8 10l4 4 4-4"/><path d="M4 18h16"/></svg>
+        Export CSV
+      </button>
+      <button type="button" class="side-link" onclick="ouvrirGestionCategories()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4l-7.2 7.2a2 2 0 01-2.8 0L3 13V3h10l7.6 7.6a2 2 0 010 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>
+        Gérer catégories
+      </button>
+    </div>
+  </aside>
+
+  <main class="workspace">
+    <header class="topbar">
+      <div class="topbar-row">
+        <button type="button" class="menu-toggle" onclick="ouvrirSidebar()" aria-label="Ouvrir le menu">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="topbar-brand" aria-hidden="true">
+          <span class="topbar-mark">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c.5 3 2 5 4 6.5C18.5 11 20 13 20 16a8 8 0 11-16 0c0-3 1.5-5 4-6.5C10 8 11.5 6 12 3z"/><path d="M12 14v7"/></svg>
+          </span>
+        </div>
+        <h2 id="view-title">Plan de la parcelle</h2>
+        <div id="plan-actions" class="top-actions">
+          <button type="button" id="btn-add-mode" class="btn btn-primary" onclick="toggleModeAjout()" title="Ajouter un arbre">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span class="btn-label">Ajouter un arbre</span>
+          </button>
+          <button type="button" id="btn-change-map" class="btn btn-ghost" onclick="document.getElementById('map-upload').click()">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5M8 9l4-4 4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+            <span class="btn-label">Plan</span>
+          </button>
+        </div>
+      </div>
+
+      <div id="filtres-bar" class="filters">
+        <select id="filter-cat" aria-label="Filtrer par catégorie" onchange="appliquerFiltres()">
+          <option value="ALL">Toutes les catégories</option>
+        </select>
+        <select id="filter-sante" aria-label="Filtrer par santé" onchange="appliquerFiltres()">
+          <option value="ALL">Tous les états</option>
+          <option value="Bonne">Bonne santé</option>
+          <option value="Moyenne">Santé moyenne</option>
+          <option value="Malade">Malade</option>
+          <option value="Mort">Mort</option>
+        </select>
+        <input type="text" id="filter-search" placeholder="Rechercher une espèce…" aria-label="Rechercher une espèce" oninput="appliquerFiltres()">
+        <span id="filter-count"></span>
+      </div>
+    </header>
+
+    <!-- Vue Plan -->
+    <section id="view-plan" class="view is-visible" aria-label="Plan de la parcelle">
+      <div id="map-outer" class="map-shell">
+        <div id="map-scroll-area" class="hide-scrollbar">
+          <div id="empty-map-state" class="hidden">
+            <div class="empty-illu" aria-hidden="true">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10.5" r="1.5"/><path d="M21 15l-5-5-8 8"/></svg>
+            </div>
+            <h3>Importez le plan de votre parcelle</h3>
+            <p>Ajoutez une photo satellite ou un schéma pour y placer et suivre vos arbres.</p>
+            <label class="btn btn-primary">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V5M8 9l4-4 4 4"/><path d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+              Sélectionner une image
+              <input type="file" id="map-upload" accept="image/*" class="hidden" onchange="chargerNouvelleImage(event)">
+            </label>
+          </div>
+
+          <div id="map-inner-pad">
+            <div id="map-content-wrapper" class="map-container">
+              <img src="" alt="Plan du jardin" id="map-image" class="hidden" draggable="false">
+            </div>
+          </div>
+        </div>
+
+        <div id="map-controls">
+          <button type="button" class="btn-icon" data-map-action="zoom-in" title="Zoom +" aria-label="Zoom plus">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button type="button" class="btn-icon" data-map-action="zoom-out" title="Zoom −" aria-label="Zoom moins">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+          </button>
+          <button type="button" class="btn-icon" data-map-action="rotate" title="Rotation" aria-label="Pivoter le plan">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0115.5-6.36M21 3v6h-6"/><path d="M21 12a9 9 0 01-15.5 6.36M3 21v-6h6"/></svg>
+          </button>
+        </div>
+
+        <div id="map-legend" class="hidden">
+          <p class="legend-title">Légende</p>
+          <div id="legend-items"></div>
+        </div>
+
+        <div id="add-mode-hint" class="hidden">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          Mode ajout actif — cliquez sur le plan
+        </div>
+      </div>
+    </section>
+
+    <!-- Vue Inventaire -->
+    <section id="view-table" class="view" aria-label="Inventaire">
+      <div class="table-panel">
+        <div class="table-scroll hide-scrollbar desktop-only">
+          <table class="inventory">
+            <thead>
+              <tr>
+                <th scope="col">Photo</th>
+                <th scope="col" class="sortable" onclick="trierTableau('espece')">Espèce</th>
+                <th scope="col" class="sortable" onclick="trierTableau('categorie')">Catégorie</th>
+                <th scope="col" class="sortable" onclick="trierTableau('provenance')">Provenance</th>
+                <th scope="col" class="sortable" onclick="trierTableau('sante')">Santé</th>
+                <th scope="col" class="sortable" onclick="trierTableau('date_plantation')">Plantation</th>
+                <th scope="col" class="sortable" onclick="trierTableau('jours_sans_suivi')">Dernier suivi</th>
+                <th scope="col">Taille Act.</th>
+                <th scope="col" class="sortable" onclick="trierTableau('croissance_cm')">Évolution</th>
+                <th scope="col" class="sortable" onclick="trierTableau('recolte_totale')">Récolte</th>
+                <th scope="col">Notes</th>
+              </tr>
+            </thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+        <div id="inventory-cards" class="inventory-cards mobile-only hide-scrollbar" aria-label="Liste des arbres"></div>
+      </div>
+    </section>
+
+    <!-- Vue Tableau de bord -->
+    <section id="view-dashboard" class="view hide-scrollbar" aria-label="Tableau de bord" style="overflow-y:auto">
+      <div class="stats">
+        <div class="stat-card">
+          <p class="stat-label">Arbres</p>
+          <p class="stat-value" id="stat-total">0</p>
+        </div>
+        <div class="stat-card">
+          <p class="stat-label">À surveiller</p>
+          <p class="stat-value danger" id="stat-malades">0</p>
+        </div>
+        <div class="stat-card">
+          <p class="stat-label">Max pousse</p>
+          <p class="stat-value" id="stat-croissance" style="font-size:1.15rem">-</p>
+        </div>
+        <div class="stat-card stat-card--harvest">
+          <p class="stat-label">Total récoltes</p>
+          <p class="stat-value amber" id="stat-recolte">0 kg</p>
+        </div>
+      </div>
+
+      <div class="charts">
+        <div class="panel">
+          <h3 style="text-align:center;margin-bottom:1rem">Répartition par catégorie</h3>
+          <div class="chart-box"><canvas id="chartCategories"></canvas></div>
+        </div>
+        <div class="panel">
+          <h3 style="text-align:center;margin-bottom:1rem">État de santé global</h3>
+          <div class="chart-box"><canvas id="chartSante"></canvas></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 style="text-align:center;margin-bottom:1rem">Évolution des récoltes par année</h3>
+        <div class="chart-box chart-box--tall"><canvas id="chartRecoltes"></canvas></div>
+      </div>
+    </section>
+  </main>
+
+  <nav id="mobile-tabbar" class="mobile-tabbar" aria-label="Navigation mobile">
+    <button type="button" class="tabbar-btn is-active" data-view="plan" onclick="switchView('plan')">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 20l-5.447-2.724A2 2 0 013 15.382V6.618a2 2 0 011.553-1.947L9 2m0 18l6-3m-6 3V2m6 15l5.447 2.724A2 2 0 0021 18.382V9.618a2 2 0 00-1.553-1.947L15 6m0 11V6m0 0L9 2"/></svg>
+      <span>Plan</span>
+    </button>
+    <button type="button" class="tabbar-btn" data-view="table" onclick="switchView('table')">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M3 10h18M3 14h18M3 18h18"/></svg>
+      <span>Inventaire</span>
+    </button>
+    <button type="button" class="tabbar-btn" data-view="dashboard" onclick="switchView('dashboard')">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19V5M4 19h16M8 17V10M12 17V7M16 17v-4"/></svg>
+      <span>Tableau</span>
+    </button>
+    <button type="button" class="tabbar-btn" onclick="ouvrirSidebar()">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      <span>Plus</span>
+    </button>
+  </nav>
+
+  <!-- Tooltip carte -->
+  <div id="hover-tooltip" class="map-tip hidden" role="tooltip">
+    <div class="map-tip-media">
+      <img id="tooltip-img" src="" alt="">
+      <div id="tooltip-img-fallback" class="map-tip-fallback" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3c.5 3 2 5 4 6.5C18.5 11 20 13 20 16a8 8 0 11-16 0c0-3 1.5-5 4-6.5C10 8 11.5 6 12 3z"/><path d="M12 14v7"/></svg>
+      </div>
+    </div>
+    <div class="map-tip-body">
+      <p id="tooltip-text" class="map-tip-title"></p>
+      <div id="tooltip-sante" class="map-tip-sante"></div>
+      <p id="tooltip-sub" class="map-tip-meta"></p>
+      <p id="tooltip-recolte" class="map-tip-recolte"></p>
+    </div>
+  </div>
+
+  <!-- Confirmation -->
+  <div id="confirm-modal" class="modal-overlay modal-overlay--center hidden" style="z-index:90" role="presentation">
+    <div class="modal-card" role="alertdialog" aria-labelledby="confirm-title" aria-describedby="confirm-message" aria-modal="true">
+      <h3 id="confirm-title">Confirmer</h3>
+      <p id="confirm-message" class="confirm-message"></p>
+      <div class="row-2" style="margin-top:1rem">
+        <button type="button" id="confirm-cancel" class="btn btn-ghost">Annuler</button>
+        <button type="button" id="confirm-ok" class="btn btn-danger">Confirmer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal catégorie -->
+  <div id="modal-categorie" class="modal-overlay modal-overlay--center hidden" style="z-index:80" data-modal-dismiss="fermerModalCategorie">
+    <div class="modal-card" role="dialog" aria-labelledby="modal-categorie-title" aria-modal="true">
+      <h3 id="modal-categorie-title">Nouvelle catégorie</h3>
+      <input type="hidden" id="cat-id">
+      <input type="hidden" id="cat-ancien-nom">
+      <div class="field">
+        <label for="cat-nom">Nom de la catégorie</label>
+        <input type="text" id="cat-nom" placeholder="ex: Palmier, Agrume…">
+      </div>
+      <div class="field">
+        <label for="cat-couleur">Couleur sur la carte</label>
+        <input type="color" id="cat-couleur" value="#10b981" style="width:100%;height:2.75rem;padding:0.2rem;cursor:pointer">
+      </div>
+      <div class="row-2" style="margin-top:0.5rem">
+        <button type="button" class="btn btn-ghost" onclick="fermerModalCategorie()">Annuler</button>
+        <button type="button" id="btn-save-categorie" class="btn btn-primary" onclick="sauvegarderCategorie()">Créer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal gestion catégories -->
+  <div id="modal-gestion-categories" class="modal-overlay modal-overlay--center hidden" style="z-index:80" data-modal-dismiss="fermerGestionCategories">
+    <div class="modal-card" role="dialog" aria-labelledby="gestion-categories-title" aria-modal="true" style="max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-head" style="padding:0 0 0.75rem;border:0">
+        <h3 id="gestion-categories-title">Catégories</h3>
+        <button type="button" class="icon-btn-close" onclick="fermerGestionCategories()" aria-label="Fermer">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div id="liste-categories" class="hide-scrollbar" style="overflow-y:auto;flex:1;margin-bottom:1rem"></div>
+      <button type="button" class="btn btn-primary" style="width:100%" onclick="ouvrirFormulaireCategorie()">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        Nouvelle catégorie
+      </button>
+    </div>
+  </div>
+
+  <!-- Modal provenance -->
+  <div id="modal-provenance" class="modal-overlay modal-overlay--center hidden" style="z-index:80" data-modal-dismiss="fermerModalProvenance">
+    <div class="modal-card" role="dialog" aria-labelledby="modal-provenance-title" aria-modal="true">
+      <h3 id="modal-provenance-title">Nouvelle provenance</h3>
+      <div class="field">
+        <label for="prov-nom">Nom de la provenance</label>
+        <input type="text" id="prov-nom" placeholder="ex: Pépinière locale…">
+      </div>
+      <div class="row-2" style="margin-top:0.5rem">
+        <button type="button" class="btn btn-ghost" onclick="fermerModalProvenance()">Annuler</button>
+        <button type="button" class="btn btn-primary" onclick="sauvegarderNouvelleProvenance()">Créer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal arbre -->
+  <div id="arbre-modal-overlay" class="modal-overlay hidden" onclick="fermerModalArbre()"></div>
+
+  <div id="arbre-modal" class="modal-center hidden">
+    <div id="arbre-modal-content" class="modal-card modal-card--wide" role="dialog" aria-labelledby="panel-title" aria-modal="true">
+      <div class="modal-head">
+        <h3 id="panel-title">Détails de l'arbre</h3>
+        <button type="button" class="icon-btn-close" onclick="fermerModalArbre()" aria-label="Fermer">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+
+      <div class="modal-body-split">
+        <div class="modal-col modal-col--form hide-scrollbar">
+          <form id="arbre-form" onsubmit="sauvegarderArbre(event)">
+            <input type="hidden" id="form-id">
+            <input type="hidden" id="form-x">
+            <input type="hidden" id="form-y">
+
+            <div class="row-2" style="align-items:flex-start;margin-bottom:0.9rem">
+              <div class="photo-box">
+                <img id="form-photo-preview" src="" alt="" class="hidden" onclick="ouvrirLightbox(this.src)">
+                <div id="form-photo-placeholder" class="photo-placeholder">
+                  <svg class="icon icon-lg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3a2 2 0 012 2v9a2 2 0 01-2 2H4a2 2 0 01-2-2v-9a2 2 0 012-2z"/><circle cx="12" cy="13" r="3.5"/></svg>
+                  Pas de photo
+                </div>
+                <label class="photo-change">
+                  Changer
+                  <input type="file" id="form-photo" accept="image/*" class="hidden" onchange="previewMainPhoto(event)">
+                </label>
+              </div>
+              <div style="flex:1;min-width:0">
+                <div class="field">
+                  <label for="form-espece">Espèce / Plante *</label>
+                  <input type="text" id="form-espece" required>
+                </div>
+                <div class="field" style="margin-bottom:0">
+                  <label for="form-sante">État de santé</label>
+                  <select id="form-sante">
+                    <option value="Bonne">Bonne santé</option>
+                    <option value="Moyenne">Santé moyenne</option>
+                    <option value="Malade">Malade (alerte)</option>
+                    <option value="Mort">Mort</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div class="row-2">
+              <div class="field">
+                <label for="form-categorie">Catégorie</label>
+                <div style="display:flex;gap:0.4rem">
+                  <select id="form-categorie" style="flex:1">
+                    <option value="">Aucune</option>
+                  </select>
+                  <button type="button" class="btn-icon" onclick="ouvrirFormulaireCategorie()" title="Ajouter une catégorie" aria-label="Ajouter une catégorie">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
+                </div>
+              </div>
+              <div class="field">
+                <label for="form-provenance">Provenance</label>
+                <div style="display:flex;gap:0.4rem">
+                  <select id="form-provenance" style="flex:1">
+                    <option value="">Inconnue</option>
+                  </select>
+                  <button type="button" class="btn-icon" onclick="document.getElementById('modal-provenance').classList.remove('hidden')" title="Ajouter une provenance" aria-label="Ajouter une provenance">
+                    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row-2">
+              <div class="field">
+                <label for="form-date">Planté le</label>
+                <input type="date" id="form-date">
+              </div>
+              <div class="field">
+                <label for="form-taille">Taille initiale</label>
+                <input type="text" id="form-taille" placeholder="ex: 1m20 ou 80cm">
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="form-notes">Notes globales</label>
+              <textarea id="form-notes" rows="3"></textarea>
+            </div>
+
+            <div class="row-2" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
+              <button type="button" id="btn-delete-arbre" class="btn btn-danger hidden" onclick="supprimerArbre()">Supprimer l'arbre</button>
+              <button type="submit" class="btn btn-primary" style="flex:1">Enregistrer l'arbre</button>
+            </div>
+          </form>
+        </div>
+
+        <div id="section-historique" class="modal-col modal-col--history hide-scrollbar" style="display:flex;flex-direction:column">
+          <div class="panel-head" style="margin-bottom:1rem">
+            <h4 class="display" style="margin:0;font-size:1.2rem;color:var(--forest-deep)">Historique &amp; suivi</h4>
+            <button type="button" class="btn btn-primary" onclick="ouvrirFormulaireSuivi()">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              Nouveau point
+            </button>
+          </div>
+
+          <div id="arbre-galerie" class="arbre-galerie hidden" aria-label="Galerie photos"></div>
+
+          <div id="chart-container" class="panel hidden" style="padding:1rem;margin-bottom:1rem;flex-shrink:0">
+            <p class="stat-label" style="margin-bottom:0.75rem">Courbe de croissance</p>
+            <div class="chart-box" style="height:10rem">
+              <canvas id="growthChart"></canvas>
+            </div>
+          </div>
+
+          <div id="historique-list" style="flex:1">
+            <p style="text-align:center;font-size:0.875rem;color:var(--ink-soft);padding:2.5rem 0;font-style:italic;margin:0">Cet arbre n'a pas encore d'historique.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal suivi -->
+  <div id="suivi-modal" class="modal-overlay modal-overlay--center hidden" style="z-index:70" data-modal-dismiss="fermerFormulaireSuivi">
+    <div class="modal-card" role="dialog" aria-labelledby="suivi-modal-title" aria-modal="true" style="position:relative">
+      <button type="button" class="icon-btn-close" style="position:absolute;top:1rem;right:1rem" onclick="fermerFormulaireSuivi()" aria-label="Fermer">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <h3 id="suivi-modal-title">Nouveau point d'étape</h3>
+
+      <form id="suivi-form" onsubmit="sauvegarderSuivi(event)" style="margin-top:1.1rem">
+        <input type="hidden" id="suivi-id">
+        <input type="hidden" id="suivi-arbre-id">
+
+        <div class="row-2">
+          <div class="field">
+            <label for="suivi-date">Date *</label>
+            <input type="date" id="suivi-date" required>
+          </div>
+          <div class="field">
+            <label for="suivi-taille">Taille mesurée</label>
+            <input type="text" id="suivi-taille" placeholder="ex: 2m10">
+          </div>
+          <div class="field">
+            <label for="suivi-recolte" style="color:var(--amber)">Récolte (kg)</label>
+            <input type="number" step="0.1" id="suivi-recolte" placeholder="ex: 15.5">
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="suivi-notes">Intervention / Observations</label>
+          <textarea id="suivi-notes" rows="3" placeholder="Taille, maladie, arrosage…"></textarea>
+        </div>
+
+        <div class="field" style="background:var(--mist);border:1px solid var(--line);border-radius:0.9rem;padding:0.85rem">
+          <label for="suivi-photo">Photo de l'étape</label>
+          <input type="file" id="suivi-photo" accept="image/*">
+        </div>
+
+        <div class="row-2" style="margin-top:0.75rem">
+          <button type="button" class="btn btn-ghost" onclick="fermerFormulaireSuivi()">Annuler</button>
+          <button type="submit" class="btn btn-primary">Enregistrer</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Lightbox -->
+  <div id="lightbox" class="hidden" onclick="fermerLightbox()" role="dialog" aria-label="Photo agrandie" aria-modal="true">
+    <img id="lightbox-img" src="" alt="" onclick="event.stopPropagation()">
+  </div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
