@@ -237,12 +237,28 @@ function persistMapView() {
     } catch (_) { /* private mode / quota */ }
 }
 
+/** Zoom max : assez pour inspecter le plan au pixel près. */
 function maxZoomLevel() {
-    return 2000;
+    const img = document.getElementById('map-image');
+    const base = Number(window.baseMapWidth) || 800;
+    if (img?.naturalWidth > 0 && base > 0) {
+        // Jusqu’à ~10 px écran par px image (très proche)
+        return Math.min(25000, Math.max(5000, Math.round((img.naturalWidth * 10 / base) * 100)));
+    }
+    return 10000;
+}
+
+function zoomStep(deltaSign) {
+    // Pas plus grand quand on est déjà bien zoomé
+    if (zoomLevel >= 2000) return deltaSign * 200;
+    if (zoomLevel >= 800) return deltaSign * 100;
+    if (zoomLevel >= 300) return deltaSign * 50;
+    return deltaSign * 40;
 }
 
 window.changerZoom = function(delta) {
-    const next = Math.max(50, Math.min(maxZoomLevel(), zoomLevel + delta));
+    const step = typeof delta === 'number' ? delta : zoomStep(1);
+    const next = Math.max(40, Math.min(maxZoomLevel(), zoomLevel + step));
     if (next === zoomLevel) return;
     const area = document.getElementById('map-scroll-area');
     let anchor = null;
@@ -256,18 +272,21 @@ window.changerZoom = function(delta) {
     persistMapView();
     appliquerTransformations();
     if (anchor && area) {
-        // Laisser le layout appliquer la nouvelle largeur avant de recentrer
         requestAnimationFrame(() => {
             area.scrollLeft = anchor.xRatio * area.scrollWidth - area.clientWidth / 2;
             area.scrollTop = anchor.yRatio * area.scrollHeight - area.clientHeight / 2;
         });
     }
 };
+window.zoomIn = function() { window.changerZoom(zoomStep(1)); };
+window.zoomOut = function() { window.changerZoom(zoomStep(-1)); };
+
 window.changerRotation = function(delta) {
     rotationDeg += delta;
     persistMapView();
     appliquerTransformations();
 };
+
 function appliquerTransformations() {
     const wrapper = document.getElementById('map-content-wrapper');
     if (!wrapper) return;
@@ -278,33 +297,46 @@ function appliquerTransformations() {
     wrapper.style.transform = `rotate(${rotationDeg}deg)`;
 }
 
-function setZoomLevel(level, { persist = true } = {}) {
-    zoomLevel = Math.max(50, Math.min(maxZoomLevel(), level));
+function setZoomLevel(level, { persist = true, anchorClientX = null, anchorClientY = null } = {}) {
+    const area = document.getElementById('map-scroll-area');
+    let anchor = null;
+    if (area && area.scrollWidth > 0) {
+        if (anchorClientX != null && anchorClientY != null) {
+            const rect = area.getBoundingClientRect();
+            const localX = area.scrollLeft + (anchorClientX - rect.left);
+            const localY = area.scrollTop + (anchorClientY - rect.top);
+            anchor = {
+                xRatio: localX / area.scrollWidth,
+                yRatio: localY / Math.max(area.scrollHeight, 1),
+                offsetX: anchorClientX - rect.left,
+                offsetY: anchorClientY - rect.top,
+            };
+        } else {
+            anchor = {
+                xRatio: (area.scrollLeft + area.clientWidth / 2) / area.scrollWidth,
+                yRatio: (area.scrollTop + area.clientHeight / 2) / area.scrollHeight,
+                offsetX: area.clientWidth / 2,
+                offsetY: area.clientHeight / 2,
+            };
+        }
+    }
+    zoomLevel = Math.max(40, Math.min(maxZoomLevel(), level));
     if (persist) persistMapView();
     appliquerTransformations();
+    if (anchor && area) {
+        requestAnimationFrame(() => {
+            area.scrollLeft = anchor.xRatio * area.scrollWidth - anchor.offsetX;
+            area.scrollTop = anchor.yRatio * area.scrollHeight - anchor.offsetY;
+        });
+    }
 }
 
 function bindMapControlButtons() {
     const root = document.getElementById('map-controls');
     if (!root || root.dataset.bound === '1') return;
     root.dataset.bound = '1';
-    let lastTs = 0;
-    const run = (action) => {
-        const now = Date.now();
-        if (now - lastTs < 350) return;
-        lastTs = now;
-        if (action === 'zoom-in') window.changerZoom(25);
-        else if (action === 'zoom-out') window.changerZoom(-25);
-        else if (action === 'rotate') window.changerRotation(90);
-    };
-    root.addEventListener('pointerup', (e) => {
-        if (e.pointerType === 'mouse' && e.button !== 0) return;
-        const btn = e.target.closest('[data-map-action]');
-        if (!btn || !root.contains(btn)) return;
-        e.preventDefault();
-        e.stopPropagation();
-        run(btn.getAttribute('data-map-action'));
-    });
+    // Les boutons ont déjà onclick ; on évite juste que le pan carte capture le geste
+    root.addEventListener('pointerdown', (e) => e.stopPropagation());
 }
 
 // --- PAN (souris + tactile) + PLACEMENT ARBRE ---
@@ -443,6 +475,18 @@ scrollArea.addEventListener('touchend', (e) => {
         pinchStartDist = 0;
     }
 }, { passive: true });
+
+// Molette : zoom vers le curseur (pratique sur ordinateur)
+scrollArea.addEventListener('wheel', (e) => {
+    if (mapImage.classList.contains('hidden')) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    setZoomLevel(zoomLevel * factor, {
+        persist: true,
+        anchorClientX: e.clientX,
+        anchorClientY: e.clientY,
+    });
+}, { passive: false });
 
 // Fallback souris si le navigateur n'a pas livré le placement au pointerup
 mapImage.addEventListener('click', function(e) {
