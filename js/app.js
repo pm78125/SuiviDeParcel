@@ -328,12 +328,20 @@ window.changerRotation = function(delta) {
 
 function appliquerTransformations() {
     const wrapper = document.getElementById('map-content-wrapper');
+    const img = document.getElementById('map-image');
     if (!wrapper) return;
     const base = Number(window.baseMapWidth) || 800;
     const z = Number.isFinite(zoomLevel) ? zoomLevel : 100;
     const newWidth = Math.max(40, base * (z / 100));
     wrapper.style.width = `${newWidth}px`;
+    wrapper.style.minWidth = `${newWidth}px`;
     wrapper.style.maxWidth = 'none';
+    wrapper.style.flexShrink = '0';
+    if (img) {
+        img.style.width = '100%';
+        img.style.maxWidth = 'none';
+        img.style.height = 'auto';
+    }
     wrapper.style.transform = `rotate(${rotationDeg}deg)`;
     updateZoomControlsUi();
 }

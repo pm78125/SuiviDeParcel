@@ -420,26 +420,33 @@ h1, h2, h3, h4, .display {
   line-height: 1.45;
 }
 #map-inner-pad {
+  /* max-content : le pad grandit avec le zoom (sinon overflow:auto ne scrolle pas) */
+  width: max-content;
+  height: max-content;
   min-width: 100%;
   min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 0.35rem;
+  box-sizing: border-box;
 }
 #map-content-wrapper {
   position: relative;
+  flex-shrink: 0; /* crucial : sans ça le flex écrase le zoom à la largeur du viewport */
   transition: transform 0.3s;
   transform-origin: center;
   background: #fff;
   border-radius: 0.5rem;
   overflow: hidden;
   box-shadow: 0 12px 40px rgba(15, 61, 46, 0.16);
+  max-width: none;
 }
 #map-image {
   display: block;
   width: 100%;
   height: auto;
+  max-width: none;
   user-select: none;
   -webkit-user-drag: none;
   cursor: grab;
