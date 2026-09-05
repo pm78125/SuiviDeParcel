@@ -192,136 +192,31 @@ function parseTailleToCm(val) {
     return null;
 }
 
-/** Pipeline photo robuste Samsung S20 (galerie + caméra). */
+/** Pipeline photo Samsung S20 — évite arrayBuffer (souvent bloqué par la galerie). */
 
-function isJpegMagic(buffer) {
-    if (!buffer || buffer.byteLength < 2) return false;
-    const u = new Uint8Array(buffer);
-    return u[0] === 0xFF && u[1] === 0xD8;
-}
-
-function sniffImageType(buffer, fallback = 'image/jpeg') {
-    if (!buffer || buffer.byteLength < 12) return fallback;
-    const u = new Uint8Array(buffer);
-    if (u[0] === 0xFF && u[1] === 0xD8) return 'image/jpeg';
-    if (u[0] === 0x89 && u[1] === 0x50 && u[2] === 0x4E && u[3] === 0x47) return 'image/png';
-    if (u[0] === 0x52 && u[1] === 0x49 && u[2] === 0x46 && u[3] === 0x46) return 'image/webp';
-    // HEIC/HEIF : ....ftypheic / mif1
-    const head = String.fromCharCode(...u.slice(4, 12));
-    if (head.includes('ftyp')) return 'image/heic';
-    return fallback;
-}
-
-async function readFileAsArrayBuffer(file) {
+/** Clone synchrone du File (slice) : garde un Blob utilisable hors du sélecteur. */
+function clonePhotoBlob(file) {
+    if (!file) return null;
     try {
-        const buf = await file.arrayBuffer();
-        if (buf && buf.byteLength) return buf;
+        const type = (file.type && file.type !== 'application/octet-stream')
+            ? file.type
+            : 'image/jpeg';
+        if (file.size > 0) return file.slice(0, file.size, type);
+        // size inconnu : slice() sans borne copie tout le contenu accessible
+        return file.slice();
     } catch (e) {
-        console.warn('arrayBuffer échoué', e);
+        console.warn('slice photo', e);
     }
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const r = reader.result;
-            if (r && r.byteLength) resolve(r);
-            else reject(new Error('Lecture photo vide'));
-        };
-        reader.onerror = () => reject(new Error('Impossible de lire la photo'));
-        reader.readAsArrayBuffer(file);
-    });
+    return file;
 }
 
-/** Copie immédiate — ne pas attendre (sinon la galerie Samsung révoque le File). */
-async function materializePhotoFile(file) {
-    if (!file) throw new Error('Aucune photo');
-
-    let buffer = null;
-    let lastErr = null;
-
-    // Essai immédiat, puis quelques retries courts si size=0 / lecture ratée
-    for (let i = 0; i < 6; i++) {
-        try {
-            if (!file.size && i > 0) {
-                await new Promise((r) => setTimeout(r, 80));
-            }
-            if (!file.size && i < 5) continue;
-            buffer = await readFileAsArrayBuffer(file);
-            if (buffer && buffer.byteLength) break;
-        } catch (e) {
-            lastErr = e;
-            await new Promise((r) => setTimeout(r, 80));
-        }
-    }
-
-    if (!buffer || !buffer.byteLength) {
-        throw new Error(lastErr?.message || 'Impossible de lire la photo — réessayez');
-    }
-
-    const type = sniffImageType(buffer, (file.type && file.type.startsWith('image/')) ? file.type : 'image/jpeg');
-    // On stocke toujours comme Blob JPEG-compatible pour l’upload ; le contenu brut reste intact
-    const blobType = (type === 'image/heic' || type === 'image/heif') ? 'application/octet-stream' : type;
-    try {
-        const out = new File([buffer], 'photo-upload.bin', { type: blobType, lastModified: Date.now() });
-        out._rawType = type;
-        return out;
-    } catch (_) {
-        const out = new Blob([buffer], { type: blobType });
-        out._rawType = type;
-        return out;
-    }
-}
-
-function loadImageFromBlob(blob) {
+function loadImageFromUrl(url) {
     return new Promise((resolve, reject) => {
-        const url = URL.createObjectURL(blob);
         const img = new Image();
-        img.onload = () => {
-            URL.revokeObjectURL(url);
-            resolve(img);
-        };
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
-            reject(new Error('Décodage image impossible'));
-        };
-        // decode() plus fiable sur Chrome Android quand dispo
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Décodage image impossible'));
         img.src = url;
     });
-}
-
-async function fileToDrawable(file, maxSide = 1280) {
-    // 1) Image() — souvent le plus fiable avec la galerie Samsung
-    try {
-        return await loadImageFromBlob(file);
-    } catch (_) { /* suite */ }
-
-    // 2) createImageBitmap avec resize (évite OOM)
-    const attempts = [
-        { imageOrientation: 'from-image', resizeWidth: maxSide, resizeQuality: 'low' },
-        { imageOrientation: 'from-image', resizeHeight: maxSide, resizeQuality: 'low' },
-        { resizeWidth: maxSide },
-        { imageOrientation: 'from-image' },
-        {},
-    ];
-    for (const opts of attempts) {
-        try {
-            return await createImageBitmap(file, opts);
-        } catch (_) { /* suite */ }
-    }
-    throw new Error('Décodage image impossible');
-}
-
-function isLikelyImageFile(file) {
-    if (!file) return false;
-    const type = (file.type || '').toLowerCase();
-    if (type.startsWith('image/') || type === 'application/octet-stream' || !type) return true;
-    return true; // on a déjà matérialisé depuis le sélecteur image/*
-}
-
-function preferredPhotoMaxSize(file) {
-    const bytes = file?.size || 0;
-    if (bytes > 5_000_000) return 960;
-    if (bytes > 2_500_000) return 1200;
-    return 1400;
 }
 
 async function canvasToJpegBlob(canvas, quality) {
@@ -331,76 +226,127 @@ async function canvasToJpegBlob(canvas, quality) {
     });
     if (out && out.size) return out;
     const dataUrl = canvas.toDataURL('image/jpeg', quality);
-    const res = await fetch(dataUrl);
-    out = await res.blob();
-    if (!out || !out.size) throw new Error('Export JPEG vide');
+    const bin = atob(dataUrl.split(',')[1] || '');
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    out = new Blob([bytes], { type: 'image/jpeg' });
+    if (!out.size) throw new Error('Export JPEG vide');
     return out;
 }
 
-async function compressImage(file, maxSize = null, quality = 0.82) {
-    if (!file) return file;
-    const startSize = maxSize || preferredPhotoMaxSize(file);
-    const trySizes = [...new Set([startSize, 1200, 960, 720, 512])];
-    const qualities = [quality, 0.7, 0.55];
+/**
+ * Compresse via URL objet + Image/canvas — sans lire le File en ArrayBuffer
+ * (méthode qui échoue sur la galerie Samsung S20).
+ */
+async function compressImage(file, maxSize = 1200, quality = 0.8) {
+    if (!file) throw new Error('Aucune photo');
 
-    for (const size of trySizes) {
-        for (const q of qualities) {
+    const url = URL.createObjectURL(file);
+    try {
+        let img;
+        try {
+            img = await loadImageFromUrl(url);
+            if (img.decode) {
+                try { await img.decode(); } catch (_) { /* ok */ }
+            }
+        } catch (e1) {
+            // createImageBitmap direct sur le Blob
             try {
-                const drawable = await fileToDrawable(file, size);
-                const srcW = drawable.naturalWidth || drawable.width;
-                const srcH = drawable.naturalHeight || drawable.height;
-                if (!srcW || !srcH) {
-                    drawable.close?.();
-                    throw new Error('dimensions invalides');
-                }
-                const scale = Math.min(1, size / Math.max(srcW, srcH));
-                const width = Math.max(1, Math.round(srcW * scale));
-                const height = Math.max(1, Math.round(srcH * scale));
+                const bmp = await createImageBitmap(file, {
+                    imageOrientation: 'from-image',
+                    resizeWidth: maxSize,
+                    resizeQuality: 'low',
+                });
                 const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d', { alpha: false });
-                if (!ctx) throw new Error('canvas 2d indisponible');
-                ctx.fillStyle = '#fff';
-                ctx.fillRect(0, 0, width, height);
-                ctx.drawImage(drawable, 0, 0, width, height);
-                drawable.close?.();
-
-                const out = await canvasToJpegBlob(canvas, q);
-                try {
-                    return new File([out], 'photo.jpg', { type: 'image/jpeg', lastModified: Date.now() });
-                } catch (_) {
-                    return new Blob([out], { type: 'image/jpeg' });
-                }
-            } catch (e) {
-                console.warn('Compression échouée', size, q, e?.message || e);
+                const scale = Math.min(1, maxSize / Math.max(bmp.width, bmp.height));
+                canvas.width = Math.max(1, Math.round(bmp.width * scale));
+                canvas.height = Math.max(1, Math.round(bmp.height * scale));
+                canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+                bmp.close?.();
+                return await canvasToJpegBlob(canvas, quality);
+            } catch (e2) {
+                console.warn('compress bitmap', e2);
+                throw e1;
             }
         }
+
+        const srcW = img.naturalWidth || img.width;
+        const srcH = img.naturalHeight || img.height;
+        if (!srcW || !srcH) throw new Error('Image sans dimensions');
+
+        const trySizes = [...new Set([maxSize, 960, 720, 512])];
+        const qualities = [quality, 0.7, 0.55];
+        let lastErr = null;
+
+        for (const size of trySizes) {
+            for (const q of qualities) {
+                try {
+                    const scale = Math.min(1, size / Math.max(srcW, srcH));
+                    const width = Math.max(1, Math.round(srcW * scale));
+                    const height = Math.max(1, Math.round(srcH * scale));
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d', { alpha: false });
+                    ctx.fillStyle = '#fff';
+                    ctx.fillRect(0, 0, width, height);
+                    ctx.drawImage(img, 0, 0, width, height);
+                    const blob = await canvasToJpegBlob(canvas, q);
+                    if (blob?.size) return blob;
+                } catch (e) {
+                    lastErr = e;
+                    console.warn('compress canvas', size, q, e);
+                }
+            }
+        }
+        throw lastErr || new Error('Compression impossible');
+    } finally {
+        URL.revokeObjectURL(url);
+    }
+}
+
+/**
+ * Prépare un Blob prêt à uploader. Ne matérialise PAS via arrayBuffer.
+ * Sur S20 on garde le Blob issu de slice + compression ObjectURL.
+ */
+async function preparePhotoForUpload(file) {
+    if (!file) throw new Error('Aucune photo');
+
+    const local = clonePhotoBlob(file);
+    // Vérifie qu’on peut au moins créer une URL / prévisualiser
+    const testUrl = URL.createObjectURL(local);
+    URL.revokeObjectURL(testUrl);
+
+    try {
+        const compressed = await compressImage(local);
+        if (compressed?.size) return compressed;
+    } catch (e) {
+        console.warn('Compression échouée, envoi du fichier tel quel', e);
     }
 
-    // Dernier recours : envoyer le JPEG brut si les octets sont déjà du JPEG
-    try {
-        const buf = await file.arrayBuffer();
-        if (isJpegMagic(buf) && buf.byteLength < 12_000_000) {
-            console.warn('Envoi JPEG brut sans recompression');
-            return new Blob([buf], { type: 'image/jpeg' });
-        }
-    } catch (_) { /* ignore */ }
-
-    throw new Error('Impossible de traiter cette photo — réessayez avec un autre cliché');
+    // Dernier recours : envoyer le Blob/File d’origine à Storage
+    if (local.size > 0) {
+        return local;
+    }
+    throw new Error('Impossible d’utiliser cette photo — réessayez');
 }
 
 async function uploadPhoto(file, prefix) {
-    const ready = (file instanceof Blob && file.size > 0)
-        ? file
-        : await materializePhotoFile(file);
-    const compressed = await compressImage(ready);
-    if (!compressed || !compressed.size) throw new Error('Photo compressée vide');
-
-    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.jpg`;
-    const { error } = await supabase.storage.from('photos').upload(fileName, compressed, {
+    // Déjà un JPEG préparé (depuis preview) → envoi direct
+    let payload = file;
+    const alreadyJpeg = file?.type === 'image/jpeg' && file.size > 0 && file.size < 3_500_000
+        && !(file instanceof File && file.name === 'photo-upload.bin');
+    if (!alreadyJpeg) {
+        payload = await preparePhotoForUpload(file);
+    }
+    const type = (payload.type && payload.type.startsWith('image/'))
+        ? payload.type
+        : 'image/jpeg';
+    const ext = type.includes('png') ? 'png' : type.includes('webp') ? 'webp' : 'jpg';
+    const fileName = `${prefix}_${Date.now()}_${Math.floor(Math.random() * 1000)}.${ext}`;
+    const { error } = await supabase.storage.from('photos').upload(fileName, payload, {
         cacheControl: '3600',
-        contentType: 'image/jpeg',
+        contentType: type.startsWith('image/') ? type : 'image/jpeg',
         upsert: false,
     });
     if (error) {
@@ -2175,16 +2121,27 @@ window.previewMainPhoto = async function(event) {
     const raw = event.target.files?.[0];
     if (!raw) return;
 
+    // Clone synchrone immédiat (avant tout await) — critique sur galerie Samsung
+    const local = clonePhotoBlob(raw);
+    pendingArbrePhotoFile = local;
+
     try {
         setArbreSaveStatus('Préparation de la photo…', 'is-saving');
-        // Copie immédiate en RAM : galerie + caméra S20 rendent le File d’origine souvent illisible ensuite
-        pendingArbrePhotoFile = await materializePhotoFile(raw);
-        const src = URL.createObjectURL(pendingArbrePhotoFile);
+        const src = URL.createObjectURL(local);
         const preview = document.getElementById('form-photo-preview');
         preview.src = src;
         preview.classList.remove('hidden');
         document.getElementById('form-photo-placeholder').classList.add('hidden');
         document.getElementById('form-photo-box')?.classList.add('has-photo');
+
+        // Prépare le JPEG tout de suite pendant que le Blob est encore valide
+        try {
+            pendingArbrePhotoFile = await preparePhotoForUpload(local);
+        } catch (prepErr) {
+            console.warn('preparePhotoForUpload', prepErr);
+            // garde le clone local : uploadPhoto retentera
+            pendingArbrePhotoFile = local;
+        }
 
         if (document.getElementById('form-id')?.value) {
             setArbreSaveStatus('Envoi de la photo…', 'is-saving');
@@ -2197,8 +2154,7 @@ window.previewMainPhoto = async function(event) {
         console.error(err);
         pendingArbrePhotoFile = null;
         setArbreSaveStatus('Échec photo', 'is-error');
-        const msg = err?.message || 'Impossible d’utiliser cette photo';
-        showToast(msg, 'danger');
+        showToast(err?.message || 'Impossible d’utiliser cette photo', 'danger');
     }
 };
 
@@ -2213,8 +2169,13 @@ window.previewSuiviPhoto = async function(event) {
         return;
     }
     try {
+        const local = clonePhotoBlob(raw);
         if (nameEl) nameEl.textContent = 'Préparation…';
-        pendingSuiviPhotoFile = await materializePhotoFile(raw);
+        try {
+            pendingSuiviPhotoFile = await preparePhotoForUpload(local);
+        } catch (_) {
+            pendingSuiviPhotoFile = local;
+        }
         if (nameEl) nameEl.textContent = raw.name || 'Photo sélectionnée';
         tile?.classList.add('has-file');
     } catch (err) {
