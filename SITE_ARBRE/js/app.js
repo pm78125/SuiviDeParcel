@@ -459,34 +459,31 @@ document.getElementById('map-content-wrapper')?.addEventListener('click', functi
 });
 
 // --- MODE AJOUT ---
-.window.toggleModeAjout = function() {
+window.toggleModeAjout = function() {
     modeAjout = !modeAjout;
     const btn = document.getElementById('btn-add-mode');
-    const dockBtn = document.getElementById('btn-add-dock');
     const hint = document.getElementById('add-mode-hint');
     const wrapper = document.getElementById('map-content-wrapper');
     const addLabel = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="btn-label">Ajouter un arbre</span>';
     const cancelLabel = '<span class="btn-label">Annuler</span>';
     if (modeAjout) {
-        [btn, dockBtn].forEach((el) => {
-            if (!el) return;
-            el.classList.add('is-cancel');
-            el.classList.remove('btn-primary');
-            el.classList.add('btn-ghost');
-            el.innerHTML = cancelLabel;
-        });
+        if (btn) {
+            btn.classList.add('is-cancel');
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-ghost');
+            btn.innerHTML = cancelLabel;
+        }
         hint?.classList.add('show');
         hint?.classList.remove('hidden');
         wrapper?.classList.add('add-mode');
         showToast('Cliquez sur le plan pour placer un arbre');
     } else {
-        [btn, dockBtn].forEach((el) => {
-            if (!el) return;
-            el.classList.remove('is-cancel');
-            el.classList.add('btn-primary');
-            el.classList.remove('btn-ghost');
-            el.innerHTML = addLabel;
-        });
+        if (btn) {
+            btn.classList.remove('is-cancel');
+            btn.classList.add('btn-primary');
+            btn.classList.remove('btn-ghost');
+            btn.innerHTML = addLabel;
+        }
         hint?.classList.remove('show');
         hint?.classList.add('hidden');
         wrapper?.classList.remove('add-mode');
