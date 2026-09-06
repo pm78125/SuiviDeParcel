@@ -6,6 +6,8 @@ let tousLesArbres = [];
 let toutesLesCategories = [];
 let toutesLesProvenances = [];
 let tousLesSuivisGlobaux = [];
+let observationsJardin = [];
+let fauneFilter = 'ALL';
 let arbreSelectionne = null;
 let modeAjout = false;
 let vueCourante = 'plan';
@@ -1273,6 +1275,7 @@ async function initialiserApp() {
             await fetchCategories();
             await fetchProvenances();
             await fetchArbres();
+            await fetchObservationsJardin();
             await configurerCarte();
         } else {
             showToast('Hors ligne — lecture du cache', 'warn');
@@ -1297,6 +1300,7 @@ async function initialiserApp() {
             await fetchCategories();
             await fetchProvenances();
             await fetchArbres();
+            await fetchObservationsJardin();
         }
         await configurerCarte();
         document.body.dataset.view = 'plan';
@@ -2683,11 +2687,211 @@ window.supprimerArbre = async function() {
     showToast('Arbre supprimé');
 }
 
+// --- FAUNE & FLORE (indépendant des arbres / inventaire) ---
+const OBS_TABLE = 'observations_jardin';
+
+function isMissingObsTableError(err) {
+    const msg = String(err?.message || err?.details || err || '');
+    const code = String(err?.code || '');
+    return code === 'PGRST205' || code === '42P01'
+        || /observations_jardin|could not find the table|relation .* does not exist/i.test(msg);
+}
+
+function setFauneSetupHint(show, message = '') {
+    const el = document.getElementById('faune-setup-hint');
+    if (!el) return;
+    if (!show) {
+        el.classList.add('hidden');
+        el.innerHTML = '';
+        return;
+    }
+    el.classList.remove('hidden');
+    el.innerHTML = message || `
+      La table Supabase <code>observations_jardin</code> n’existe pas encore.
+      Ouvrez le SQL Editor de votre projet et exécutez le fichier
+      <code>sql/observations_jardin.sql</code> du dépôt, puis rechargez la page.
+    `;
+}
+
+function formatObsDate(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso + (String(iso).length <= 10 ? 'T12:00:00' : ''));
+        if (Number.isNaN(d.getTime())) return iso;
+        return d.toLocaleDateString('fr-FR');
+    } catch (_) {
+        return iso;
+    }
+}
+
+async function fetchObservationsJardin() {
+    try {
+        const { data, error } = await supabase
+            .from(OBS_TABLE)
+            .select('*')
+            .order('date_observation', { ascending: false })
+            .order('created_at', { ascending: false });
+        if (error) throw error;
+        observationsJardin = data || [];
+        setFauneSetupHint(false);
+        renderObservationsJardin();
+    } catch (err) {
+        console.error('fetchObservationsJardin', err);
+        observationsJardin = [];
+        if (isMissingObsTableError(err)) {
+            setFauneSetupHint(true);
+        } else if (isOnline()) {
+            showToast(err?.message || 'Impossible de charger Faune & flore', 'danger');
+        }
+        renderObservationsJardin();
+    }
+}
+
+window.setFauneFilter = function(filter) {
+    fauneFilter = filter || 'ALL';
+    document.querySelectorAll('.faune-tab').forEach((btn) => {
+        btn.classList.toggle('is-active', btn.getAttribute('data-faune-filter') === fauneFilter);
+    });
+    renderObservationsJardin();
+};
+
+function renderObservationsJardin() {
+    const list = document.getElementById('faune-list');
+    const countEl = document.getElementById('faune-count');
+    if (!list) return;
+
+    const filtered = observationsJardin.filter((o) => fauneFilter === 'ALL' || o.type === fauneFilter);
+    const nFaune = observationsJardin.filter((o) => o.type === 'faune').length;
+    const nFlore = observationsJardin.filter((o) => o.type === 'flore').length;
+    if (countEl) {
+        countEl.textContent = observationsJardin.length
+            ? `${filtered.length} affichée${filtered.length > 1 ? 's' : ''} — ${nFaune} animal${nFaune > 1 ? 'aux' : ''} · ${nFlore} plante${nFlore > 1 ? 's' : ''}`
+            : 'Aucune observation pour l’instant';
+    }
+
+    if (!filtered.length) {
+        list.innerHTML = `
+          <p class="faune-empty">
+            Notez ici les animaux, fleurs et petites plantes observés dans le jardin.
+            Cette liste reste séparée du suivi des arbres.
+          </p>`;
+        return;
+    }
+
+    list.innerHTML = filtered.map((o) => {
+        const typeLabel = o.type === 'flore' ? 'Flore' : 'Faune';
+        const typeClass = o.type === 'flore' ? 'faune-badge--flore' : 'faune-badge--faune';
+        const dateLabel = formatObsDate(o.date_observation);
+        const notes = o.notes ? `<p class="faune-item-notes">${escapeHtml(o.notes)}</p>` : '';
+        return `
+          <article class="faune-item" data-id="${escapeHtml(o.id)}">
+            <span class="faune-badge ${typeClass}">${typeLabel}</span>
+            <div class="faune-item-main">
+              <p class="faune-item-title">${escapeHtml(o.espece || '')}</p>
+              ${dateLabel ? `<p class="faune-item-meta">${escapeHtml(dateLabel)}</p>` : ''}
+              ${notes}
+            </div>
+            <div class="faune-item-actions">
+              <button type="button" class="btn-icon" title="Modifier" aria-label="Modifier" onclick="ouvrirFormulaireObservation(${JSON.stringify(String(o.id))})">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+              </button>
+              <button type="button" class="btn-icon" title="Supprimer" aria-label="Supprimer" onclick="supprimerObservation(${JSON.stringify(String(o.id))})">
+                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
+              </button>
+            </div>
+          </article>`;
+    }).join('');
+}
+
+window.ouvrirFormulaireObservation = function(id) {
+    const modal = document.getElementById('modal-observation');
+    const title = document.getElementById('modal-observation-title');
+    const obs = id ? observationsJardin.find((o) => String(o.id) === String(id)) : null;
+
+    document.getElementById('obs-id').value = obs?.id || '';
+    document.getElementById('obs-type').value = obs?.type || (fauneFilter === 'flore' ? 'flore' : 'faune');
+    document.getElementById('obs-espece').value = obs?.espece || '';
+    document.getElementById('obs-notes').value = obs?.notes || '';
+    document.getElementById('obs-date').value = obs?.date_observation
+        || new Date().toISOString().slice(0, 10);
+    if (title) title.textContent = obs ? 'Modifier l’observation' : 'Nouvelle observation';
+    modal?.classList.remove('hidden');
+    setTimeout(() => document.getElementById('obs-espece')?.focus(), 50);
+};
+
+window.fermerFormulaireObservation = function() {
+    document.getElementById('modal-observation')?.classList.add('hidden');
+};
+
+window.sauvegarderObservation = async function() {
+    if (!assertOnline('enregistrement')) return;
+    const id = document.getElementById('obs-id').value;
+    const type = document.getElementById('obs-type').value;
+    const espece = document.getElementById('obs-espece').value.trim();
+    const notes = document.getElementById('obs-notes').value.trim() || null;
+    const date_observation = document.getElementById('obs-date').value || null;
+
+    if (!espece) {
+        showToast('Indiquez une espèce', 'warn');
+        return;
+    }
+    if (type !== 'faune' && type !== 'flore') {
+        showToast('Type invalide', 'warn');
+        return;
+    }
+
+    const payload = { type, espece, notes, date_observation };
+    try {
+        if (id) {
+            const { error } = await supabase.from(OBS_TABLE).update(payload).eq('id', id);
+            if (error) throw error;
+            showToast('Observation mise à jour');
+        } else {
+            const { error } = await supabase.from(OBS_TABLE).insert([payload]);
+            if (error) throw error;
+            showToast('Observation ajoutée');
+        }
+        fermerFormulaireObservation();
+        await fetchObservationsJardin();
+    } catch (err) {
+        console.error(err);
+        if (isMissingObsTableError(err)) {
+            setFauneSetupHint(true);
+            showToast('Créez d’abord la table observations_jardin (voir le bandeau)', 'danger');
+        } else {
+            showToast(err?.message || 'Enregistrement impossible', 'danger');
+        }
+    }
+};
+
+window.supprimerObservation = async function(id) {
+    if (!id) return;
+    if (!assertOnline('suppression')) return;
+    const obs = observationsJardin.find((o) => String(o.id) === String(id));
+    const ok = await confirmAction({
+        title: 'Supprimer l’observation',
+        message: `Supprimer « ${obs?.espece || 'cette espèce'} » de Faune & flore ?`,
+        confirmLabel: 'Supprimer',
+        danger: true,
+    });
+    if (!ok) return;
+    try {
+        const { error } = await supabase.from(OBS_TABLE).delete().eq('id', id);
+        if (error) throw error;
+        showToast('Observation supprimée');
+        await fetchObservationsJardin();
+    } catch (err) {
+        console.error(err);
+        showToast(err?.message || 'Suppression impossible', 'danger');
+    }
+};
+
 // --- NAVIGATION ---
 const viewTitles = {
     plan: 'Plan de la parcelle',
     table: 'Inventaire et Croissance',
-    dashboard: 'Tableau de bord'
+    dashboard: 'Tableau de bord',
+    faune: 'Faune & flore',
 };
 
 window.switchView = function(view) {
@@ -2698,21 +2902,24 @@ window.switchView = function(view) {
     if (arbreModal && !arbreModal.classList.contains('hidden')) fermerModalArbre();
     const suiviModal = document.getElementById('suivi-modal');
     if (suiviModal && !suiviModal.classList.contains('hidden')) fermerFormulaireSuivi();
+    fermerFormulaireObservation();
     vueCourante = view;
     const isMobile = window.matchMedia('(max-width: 768px)').matches;
 
     const titles = {
         plan: 'Plan',
         table: 'Inventaire',
-        dashboard: 'Tableau de bord'
+        dashboard: 'Tableau de bord',
+        faune: 'Faune & flore',
     };
     const titlesDesktop = {
         plan: 'Plan de la parcelle',
         table: 'Inventaire et croissance',
-        dashboard: 'Tableau de bord'
+        dashboard: 'Tableau de bord',
+        faune: 'Faune & flore',
     };
 
-    ['plan', 'table', 'dashboard'].forEach((v) => {
+    ['plan', 'table', 'dashboard', 'faune'].forEach((v) => {
         const el = document.getElementById(`view-${v}`);
         if (!el) return;
         el.classList.toggle('is-visible', v === view);
@@ -2740,6 +2947,10 @@ window.switchView = function(view) {
     } else {
         planActions?.classList.add('hidden');
         filtresBar?.classList.add('hidden');
+    }
+
+    if (view === 'faune') {
+        fetchObservationsJardin();
     }
 }
 
