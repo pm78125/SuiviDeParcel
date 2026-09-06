@@ -2934,10 +2934,52 @@ window.previewObsPhoto = async function(event) {
     }
 };
 
+function bindFauneListActions() {
+    const obsList = document.getElementById('faune-list');
+    if (obsList && obsList.dataset.actionsBound !== '1') {
+        obsList.dataset.actionsBound = '1';
+        obsList.addEventListener('click', (e) => {
+            const light = e.target.closest('[data-obs-lightbox]');
+            if (light) {
+                e.preventDefault();
+                ouvrirLightbox(light.getAttribute('data-obs-lightbox'));
+                return;
+            }
+            const edit = e.target.closest('[data-obs-edit]');
+            if (edit) {
+                e.preventDefault();
+                ouvrirFormulaireObservation(edit.getAttribute('data-obs-edit'));
+                return;
+            }
+            const del = e.target.closest('[data-obs-delete]');
+            if (del) {
+                e.preventDefault();
+                supprimerObservation(del.getAttribute('data-obs-delete'));
+            }
+        });
+    }
+
+    const catList = document.getElementById('liste-categories-faune');
+    if (catList && catList.dataset.actionsBound !== '1') {
+        catList.dataset.actionsBound = '1';
+        catList.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-cat-faune-delete]');
+            if (!btn) return;
+            e.preventDefault();
+            e.stopPropagation();
+            supprimerCategorieFaune(
+                btn.getAttribute('data-cat-faune-delete'),
+                btn.getAttribute('data-cat-faune-nom') || ''
+            );
+        });
+    }
+}
+
 function renderObservationsJardin() {
     const list = document.getElementById('faune-list');
     const countEl = document.getElementById('faune-count');
     if (!list) return;
+    bindFauneListActions();
 
     const filtered = observationsJardin.filter((o) => {
         if (fauneFilter !== 'ALL' && o.type !== fauneFilter) return false;
@@ -2971,7 +3013,7 @@ function renderObservationsJardin() {
         const metaBits = [catLabel, dateLabel].filter(Boolean).join(' · ');
         const notes = o.notes ? `<p class="faune-item-notes">${escapeHtml(o.notes)}</p>` : '';
         const thumb = o.image_url
-            ? `<img class="faune-item-thumb" src="${escapeHtml(o.image_url)}" alt="" onclick="ouvrirLightbox(${JSON.stringify(String(o.image_url))})">`
+            ? `<img class="faune-item-thumb" src="${escapeHtml(o.image_url)}" alt="" data-obs-lightbox="${escapeHtml(o.image_url)}">`
             : `<span class="faune-item-thumb hidden" aria-hidden="true"></span>`;
         return `
           <article class="faune-item" data-id="${escapeHtml(o.id)}">
@@ -2983,10 +3025,10 @@ function renderObservationsJardin() {
               ${notes}
             </div>
             <div class="faune-item-actions">
-              <button type="button" class="btn-icon" title="Modifier" aria-label="Modifier" onclick="ouvrirFormulaireObservation(${JSON.stringify(String(o.id))})">
+              <button type="button" class="btn-icon" title="Modifier" aria-label="Modifier" data-obs-edit="${escapeHtml(o.id)}">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
               </button>
-              <button type="button" class="btn-icon" title="Supprimer" aria-label="Supprimer" onclick="supprimerObservation(${JSON.stringify(String(o.id))})">
+              <button type="button" class="btn-icon" title="Supprimer" aria-label="Supprimer" data-obs-delete="${escapeHtml(o.id)}">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
               </button>
             </div>
@@ -3111,6 +3153,7 @@ window.fermerGestionCategoriesFaune = function() {
 function renderListeCategoriesFaune() {
     const list = document.getElementById('liste-categories-faune');
     if (!list) return;
+    bindFauneListActions();
     if (!categoriesFaune.length) {
         list.innerHTML = '<p class="empty-hint">Aucune catégorie. Ajoutez par ex. Oiseaux, Insectes…</p>';
         return;
@@ -3121,7 +3164,7 @@ function renderListeCategoriesFaune() {
         .map((c) => `
           <div class="faune-item" style="grid-template-columns:1fr auto;margin:0 0 0.45rem">
             <p class="faune-item-title" style="margin:0">${escapeHtml(c.nom)}</p>
-            <button type="button" class="btn-icon" title="Supprimer" aria-label="Supprimer ${escapeHtml(c.nom)}" onclick="supprimerCategorieFaune(${JSON.stringify(String(c.id))}, ${JSON.stringify(String(c.nom))})">
+            <button type="button" class="btn-icon" title="Supprimer" aria-label="Supprimer ${escapeHtml(c.nom)}" data-cat-faune-delete="${escapeHtml(c.id || '')}" data-cat-faune-nom="${escapeHtml(c.nom)}">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
             </button>
           </div>
@@ -3159,20 +3202,27 @@ window.ajouterCategorieFaune = async function() {
 };
 
 window.supprimerCategorieFaune = async function(id, nom) {
-    if (!id) return;
     if (!assertOnline('suppression')) return;
+    const label = nom || 'cette catégorie';
     const used = observationsJardin.some((o) => o.type === 'faune' && o.categorie === nom);
     const ok = await confirmAction({
         title: 'Supprimer la catégorie',
         message: used
-            ? `Supprimer « ${nom} » ? Les observations concernées garderont le nom en texte, sans catégorie active.`
-            : `Supprimer la catégorie « ${nom} » ?`,
+            ? `Supprimer « ${label} » ? Les observations concernées garderont le nom en texte, sans catégorie active.`
+            : `Supprimer la catégorie « ${label} » ?`,
         confirmLabel: 'Supprimer',
         danger: true,
     });
     if (!ok) return;
     try {
-        const { error } = await supabase.from(CAT_FAUNE_TABLE).delete().eq('id', id);
+        let error = null;
+        if (id && id !== 'undefined' && id !== 'null') {
+            ({ error } = await supabase.from(CAT_FAUNE_TABLE).delete().eq('id', id));
+        } else if (nom) {
+            ({ error } = await supabase.from(CAT_FAUNE_TABLE).delete().eq('nom', nom));
+        } else {
+            throw new Error('Catégorie introuvable');
+        }
         if (error) throw error;
         await fetchCategoriesFaune();
         renderListeCategoriesFaune();
