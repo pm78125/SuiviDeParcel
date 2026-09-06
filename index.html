@@ -466,6 +466,9 @@
                 <label class="photo-add-hit" id="btn-pick-arbre-photo" for="form-photo" title="Ajouter ou changer la photo" aria-label="Ajouter ou changer la photo">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                 </label>
+                <button type="button" id="btn-remove-arbre-photo" class="photo-remove-hit hidden" title="Supprimer la photo" aria-label="Supprimer la photo" onclick="supprimerPhotoArbre(event)">
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
                 <input type="file" id="form-photo" class="sr-file" accept="image/*,image/jpeg,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif">
               </div>
               <div style="flex:1;min-width:0">
@@ -600,6 +603,7 @@
             </span>
             <span id="suivi-photo-name" class="photo-pick-tile__text">Ajouter une photo</span>
           </label>
+          <button type="button" id="btn-remove-suivi-photo" class="btn btn-ghost photo-remove-btn hidden" onclick="supprimerPhotoSuivi(event)">Supprimer la photo</button>
           <input type="file" id="suivi-photo" class="sr-file" accept="image/*,image/jpeg,image/heic,image/heif,.jpg,.jpeg,.png,.webp,.heic,.heif">
         </div>
 

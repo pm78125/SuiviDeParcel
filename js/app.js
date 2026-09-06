@@ -2145,9 +2145,11 @@ window.ouvrirFormulaireSuivi = function() {
     document.getElementById('suivi-form').reset();
     clearPhotoInputs('suivi-photo');
     pendingSuiviPhotoFile = null;
+    suiviPhotoCleared = false;
     const nameEl = document.getElementById('suivi-photo-name');
     if (nameEl) nameEl.textContent = 'Ajouter une photo';
     document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
+    syncSuiviPhotoRemoveBtn(false);
     document.getElementById('suivi-id').value = '';
     document.getElementById('suivi-arbre-id').value = arbreSelectionne.id;
     document.getElementById('suivi-date').value = new Date().toISOString().split('T')[0];
@@ -2161,9 +2163,12 @@ window.editerSuivi = function(suiviId) {
     document.getElementById('suivi-form').reset();
     clearPhotoInputs('suivi-photo');
     pendingSuiviPhotoFile = null;
+    suiviPhotoCleared = false;
     const nameEl = document.getElementById('suivi-photo-name');
-    if (nameEl) nameEl.textContent = 'Ajouter une photo';
-    document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
+    const hasPhoto = !!suivi.image_url;
+    if (nameEl) nameEl.textContent = hasPhoto ? 'Photo actuelle (ou choisir une autre)' : 'Ajouter une photo';
+    document.getElementById('suivi-photo-tile')?.classList.toggle('has-file', hasPhoto);
+    syncSuiviPhotoRemoveBtn(hasPhoto);
     document.getElementById('suivi-id').value = suivi.id;
     document.getElementById('suivi-arbre-id').value = suivi.arbre_id;
     document.getElementById('suivi-date').value = suivi.date_suivi;
@@ -2175,6 +2180,8 @@ window.editerSuivi = function(suiviId) {
 }
 window.fermerFormulaireSuivi = function() {
     document.getElementById('suivi-modal').classList.add('hidden');
+    pendingSuiviPhotoFile = null;
+    suiviPhotoCleared = false;
 }
 
 window.sauvegarderSuivi = async function(e) {
@@ -2188,12 +2195,17 @@ window.sauvegarderSuivi = async function(e) {
     const photoFile = pendingSuiviPhotoFile || firstSelectedFile('suivi-photo');
     const suiviExistant = id ? tousLesSuivisGlobaux.find(s => s.id === id) : null;
     let finalImageUrl = suiviExistant ? suiviExistant.image_url : null;
+    if (suiviPhotoCleared && !photoFile) finalImageUrl = null;
 
     try {
         if (photoFile) {
             finalImageUrl = await uploadPhoto(photoFile, 'suivi');
             pendingSuiviPhotoFile = null;
+            suiviPhotoCleared = false;
             clearPhotoInputs('suivi-photo');
+        } else if (suiviPhotoCleared) {
+            finalImageUrl = null;
+            suiviPhotoCleared = false;
         }
 
         const donneesSuivi = {
@@ -2280,6 +2292,7 @@ window.ouvrirModalArbre = function(donnees) {
     document.getElementById('arbre-form').reset();
     clearPhotoInputs('form-photo');
     pendingArbrePhotoFile = null;
+    arbrePhotoCleared = false;
     suppressArbreAutosave = true;
 
     document.getElementById('panel-title').textContent = isNew ? 'Nouveau point' : "Détails de l'arbre";
@@ -2309,6 +2322,7 @@ window.ouvrirModalArbre = function(donnees) {
         placeholder.classList.remove('hidden');
         photoBox?.classList.remove('has-photo');
     }
+    syncArbrePhotoRemoveBtn();
 
     const btnDelete = document.getElementById('btn-delete-arbre');
     const secHistorique = document.getElementById('section-historique');
@@ -2344,6 +2358,7 @@ window.fermerModalArbre = function() {
     clearTooltip();
     clearTimeout(arbreAutosaveTimer);
     pendingArbrePhotoFile = null;
+    arbrePhotoCleared = false;
     suppressArbreAutosave = true;
     const content = document.getElementById('arbre-modal-content');
     content.classList.remove('is-open');
@@ -2367,7 +2382,9 @@ function firstSelectedFile(...ids) {
 }
 
 let pendingArbrePhotoFile = null;
+let arbrePhotoCleared = false;
 let pendingSuiviPhotoFile = null;
+let suiviPhotoCleared = false;
 let suppressArbreAutosave = false;
 let arbreAutosaveTimer = null;
 let arbreSaveInFlight = false;
@@ -2379,6 +2396,55 @@ function clearPhotoInputs(...ids) {
         if (el) el.value = '';
     });
 }
+
+function syncArbrePhotoRemoveBtn() {
+    const btn = document.getElementById('btn-remove-arbre-photo');
+    const box = document.getElementById('form-photo-box');
+    const has = !!box?.classList.contains('has-photo');
+    btn?.classList.toggle('hidden', !has);
+}
+
+function syncSuiviPhotoRemoveBtn(hasPhoto) {
+    document.getElementById('btn-remove-suivi-photo')?.classList.toggle('hidden', !hasPhoto);
+}
+
+window.supprimerPhotoArbre = async function(e) {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    pendingArbrePhotoFile = null;
+    arbrePhotoCleared = true;
+    clearPhotoInputs('form-photo');
+    const preview = document.getElementById('form-photo-preview');
+    const placeholder = document.getElementById('form-photo-placeholder');
+    const photoBox = document.getElementById('form-photo-box');
+    if (preview) {
+        preview.src = '';
+        preview.classList.add('hidden');
+    }
+    placeholder?.classList.remove('hidden');
+    photoBox?.classList.remove('has-photo');
+    syncArbrePhotoRemoveBtn();
+
+    if (document.getElementById('form-id')?.value) {
+        setArbreSaveStatus('Suppression de la photo…', 'is-saving');
+        await persisterArbre({ silent: true, source: 'photo' });
+    } else {
+        showToast('Photo retirée');
+    }
+};
+
+window.supprimerPhotoSuivi = function(e) {
+    e?.preventDefault?.();
+    e?.stopPropagation?.();
+    pendingSuiviPhotoFile = null;
+    suiviPhotoCleared = true;
+    clearPhotoInputs('suivi-photo');
+    const nameEl = document.getElementById('suivi-photo-name');
+    if (nameEl) nameEl.textContent = 'Ajouter une photo';
+    document.getElementById('suivi-photo-tile')?.classList.remove('has-file');
+    syncSuiviPhotoRemoveBtn(false);
+    showToast('Photo retirée — enregistrez l’étape');
+};
 
 function setArbreSaveStatus(text, state = '') {
     const el = document.getElementById('arbre-save-status');
@@ -2481,6 +2547,8 @@ window.previewMainPhoto = async function(event) {
         preview.classList.remove('hidden');
         document.getElementById('form-photo-placeholder').classList.add('hidden');
         document.getElementById('form-photo-box')?.classList.add('has-photo');
+        arbrePhotoCleared = false;
+        syncArbrePhotoRemoveBtn();
 
         if (document.getElementById('form-id')?.value) {
             setArbreSaveStatus('Envoi de la photo…', 'is-saving');
@@ -2509,19 +2577,23 @@ window.previewSuiviPhoto = async function(event) {
         pendingSuiviPhotoFile = null;
         if (nameEl) nameEl.textContent = 'Ajouter une photo';
         tile?.classList.remove('has-file');
+        syncSuiviPhotoRemoveBtn(false);
         return;
     }
     try {
         if (nameEl) nameEl.textContent = 'Préparation…';
         pendingSuiviPhotoFile = await preparePhotoForUpload(raw);
+        suiviPhotoCleared = false;
         try { input.value = ''; } catch (_) { /* ok */ }
         if (nameEl) nameEl.textContent = raw.name || 'Photo sélectionnée';
         tile?.classList.add('has-file');
+        syncSuiviPhotoRemoveBtn(true);
     } catch (err) {
         console.error(err);
         pendingSuiviPhotoFile = null;
         if (nameEl) nameEl.textContent = 'Ajouter une photo';
         tile?.classList.remove('has-file');
+        syncSuiviPhotoRemoveBtn(false);
         showToast(friendlyPhotoError(err), 'danger');
     }
 };
@@ -2561,6 +2633,7 @@ async function persisterArbre({ silent = false, source = 'manual' } = {}) {
     const id = document.getElementById('form-id').value;
     const photoFile = pendingArbrePhotoFile || firstSelectedFile('form-photo');
     let finalImageUrl = arbreSelectionne ? arbreSelectionne.image_url : null;
+    if (arbrePhotoCleared && !photoFile) finalImageUrl = null;
 
     const espece = document.getElementById('form-espece').value.trim();
     if (!espece) {
@@ -2585,7 +2658,11 @@ async function persisterArbre({ silent = false, source = 'manual' } = {}) {
         if (photoFile) {
             finalImageUrl = await uploadPhoto(photoFile, 'arbre');
             pendingArbrePhotoFile = null;
+            arbrePhotoCleared = false;
             clearPhotoInputs('form-photo');
+        } else if (arbrePhotoCleared) {
+            finalImageUrl = null;
+            arbrePhotoCleared = false;
         }
 
         const donneesArbre = {
@@ -2637,8 +2714,15 @@ async function persisterArbre({ silent = false, source = 'manual' } = {}) {
         }
 
         if (silent) {
-            setArbreSaveStatus(source === 'photo' ? 'Photo enregistrée' : 'Enregistré', 'is-saved');
-            if (source === 'photo') showToast('Photo enregistrée');
+            setArbreSaveStatus(
+                source === 'photo'
+                    ? (finalImageUrl ? 'Photo enregistrée' : 'Photo supprimée')
+                    : 'Enregistré',
+                'is-saved'
+            );
+            if (source === 'photo') {
+                showToast(finalImageUrl ? 'Photo enregistrée' : 'Photo supprimée');
+            }
         } else {
             if (btnSubmit) btnSubmit.textContent = 'Sauvegardé';
             showToast(id ? 'Arbre mis à jour' : 'Arbre ajouté');
