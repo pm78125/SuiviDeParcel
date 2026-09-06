@@ -1187,6 +1187,13 @@ table.inventory td.col-photo {
   border-radius: 0.9rem;
   box-shadow: 0 8px 22px rgba(15, 61, 46, 0.06);
 }
+.faune-item--openable {
+  cursor: pointer;
+}
+.faune-item--openable:focus-visible {
+  outline: 2px solid var(--forest-deep);
+  outline-offset: 2px;
+}
 .faune-item-thumb {
   width: 3.25rem;
   height: 3.25rem;

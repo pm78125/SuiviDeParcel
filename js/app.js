@@ -2939,23 +2939,32 @@ function bindFauneListActions() {
     if (obsList && obsList.dataset.actionsBound !== '1') {
         obsList.dataset.actionsBound = '1';
         obsList.addEventListener('click', (e) => {
-            const light = e.target.closest('[data-obs-lightbox]');
-            if (light) {
-                e.preventDefault();
-                ouvrirLightbox(light.getAttribute('data-obs-lightbox'));
-                return;
-            }
-            const edit = e.target.closest('[data-obs-edit]');
-            if (edit) {
-                e.preventDefault();
-                ouvrirFormulaireObservation(edit.getAttribute('data-obs-edit'));
-                return;
-            }
             const del = e.target.closest('[data-obs-delete]');
             if (del) {
                 e.preventDefault();
+                e.stopPropagation();
                 supprimerObservation(del.getAttribute('data-obs-delete'));
+                return;
             }
+            const light = e.target.closest('[data-obs-lightbox]');
+            if (light) {
+                e.preventDefault();
+                e.stopPropagation();
+                ouvrirLightbox(light.getAttribute('data-obs-lightbox'));
+                return;
+            }
+            const card = e.target.closest('[data-obs-open]');
+            if (card) {
+                e.preventDefault();
+                ouvrirFormulaireObservation(card.getAttribute('data-obs-open'));
+            }
+        });
+        obsList.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const card = e.target.closest('[data-obs-open]');
+            if (!card || e.target.closest('[data-obs-delete]')) return;
+            e.preventDefault();
+            ouvrirFormulaireObservation(card.getAttribute('data-obs-open'));
         });
     }
 
@@ -3016,7 +3025,7 @@ function renderObservationsJardin() {
             ? `<img class="faune-item-thumb" src="${escapeHtml(o.image_url)}" alt="" data-obs-lightbox="${escapeHtml(o.image_url)}">`
             : `<span class="faune-item-thumb hidden" aria-hidden="true"></span>`;
         return `
-          <article class="faune-item" data-id="${escapeHtml(o.id)}">
+          <article class="faune-item faune-item--openable" data-id="${escapeHtml(o.id)}" data-obs-open="${escapeHtml(o.id)}" role="button" tabindex="0" aria-label="Ouvrir ${escapeHtml(o.espece || 'observation')}">
             ${thumb}
             <span class="faune-badge ${typeClass}">${typeLabel}</span>
             <div class="faune-item-main">
@@ -3025,9 +3034,6 @@ function renderObservationsJardin() {
               ${notes}
             </div>
             <div class="faune-item-actions">
-              <button type="button" class="btn-icon" title="Modifier" aria-label="Modifier" data-obs-edit="${escapeHtml(o.id)}">
-                <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
-              </button>
               <button type="button" class="btn-icon" title="Supprimer" aria-label="Supprimer" data-obs-delete="${escapeHtml(o.id)}">
                 <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></svg>
               </button>
